@@ -19,9 +19,9 @@ LIVE_NOTE = (
 )
 
 REGIONS: dict[str, dict[str, Any]] = {
-    "it": {"emoji": "🇮🇹", "title": "Italia", "lat": 42.5, "lon": 12.5, "dist": 280},
-    "med": {"emoji": "🌊", "title": "Mediterraneo", "lat": 38.0, "lon": 15.5, "dist": 320},
-    "eu": {"emoji": "🇪🇺", "title": "Europa centrale", "lat": 48.5, "lon": 9.0, "dist": 260},
+    "it": {"emoji": "🇮🇹", "title": "Italia", "lat": 42.5, "lon": 12.5, "dist": 250},
+    "med": {"emoji": "🌊", "title": "Mediterraneo", "lat": 38.0, "lon": 15.5, "dist": 250},
+    "eu": {"emoji": "🇪🇺", "title": "Europa centrale", "lat": 48.5, "lon": 9.0, "dist": 250},
     "uk": {"emoji": "🇬🇧", "title": "Manica", "lat": 50.7, "lon": 0.2, "dist": 200},
     "us": {"emoji": "🇺🇸", "title": "Costa est USA", "lat": 40.6, "lon": -74.0, "dist": 240},
     "jp": {"emoji": "🇯🇵", "title": "Giappone", "lat": 35.6, "lon": 139.8, "dist": 220},
@@ -102,7 +102,7 @@ def fetch_aircraft(region: str = "it") -> dict[str, Any]:
 
     def load() -> dict[str, Any]:
         url = (
-            f"https://opendata.adsb.fi/api/v2/lat/{cfg['lat']}/lon/{cfg['lon']}/dist/{cfg['dist']}"
+            f"https://opendata.adsb.fi/api/v2/lat/{cfg['lat']}/lon/{cfg['lon']}/dist/{min(int(cfg['dist']), 250)}"
         )
         try:
             payload = _get_json(url)
