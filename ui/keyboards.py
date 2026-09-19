@@ -5,6 +5,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.catalog import related_items
+from services.live import REGIONS
 from services.models import WORLDS
 
 
@@ -37,7 +38,7 @@ def home_keyboard() -> InlineKeyboardMarkup:
             [kb_btn("⚙️ Ferro", "world:ferro"), kb_btn("🕊️ Patti", "world:patti")],
             [kb_btn("📖 Oggi", "home:oggi"), kb_btn("🎲 Casuale", "home:random")],
             [kb_btn("🔍 Cerca", "home:cerca"), kb_btn("🎲 Quiz", "home:quiz")],
-            [kb_btn("🧭 Esplora", "home:esplora")],
+            [kb_btn("📡 Live", "home:live"), kb_btn("🧭 Esplora", "home:esplora")],
         ]
     )
 
@@ -48,6 +49,7 @@ def esplora_keyboard() -> InlineKeyboardMarkup:
             [kb_btn("⚔️ Epoche", "world:epoche"), kb_btn("🗺️ Campi", "world:campi")],
             [kb_btn("🪖 Truppe", "world:truppe"), kb_btn("🏳️ Bandiere", "world:bandiere")],
             [kb_btn("⚙️ Ferro", "world:ferro"), kb_btn("🕊️ Patti", "world:patti")],
+            [kb_btn("📡 Live aerei e navi", "home:live")],
             nav_row(),
         ]
     )
@@ -80,6 +82,7 @@ def world_keyboard(key: str) -> InlineKeyboardMarkup:
             [kb_btn("🏰 Fortificazioni", "l:fort:all")],
             [kb_btn("🚙 Terra", "e:t34"), kb_btn("✈️ Aria", "e:spitfire")],
             [kb_btn("⚓ Mare", "e:portaerei"), kb_btn("🚀 Spazio", "e:satcom")],
+            [kb_btn("📡 Live aerei e navi", "home:live")],
         ],
         "patti": [
             [kb_btn("📜 Documenti", "l:doc:all"), kb_btn("🕊️ Pace", "l:peace:all")],
@@ -151,3 +154,50 @@ def after_quiz_keyboard(eid: str | None) -> InlineKeyboardMarkup:
 
 def back_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([nav_row()])
+
+
+def live_hub_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [kb_btn("✈️ Aerei Italia", "live:ac:it"), kb_btn("🌊 Mediterraneo", "live:ac:med")],
+            [kb_btn("🚁 Elicotteri", "live:heli:it"), kb_btn("⚓ Navi Baltico", "live:ships")],
+            [kb_btn("🛰️ ISS", "live:iss")],
+            nav_row(),
+        ]
+    )
+
+
+def live_region_keyboard(kind: str, region: str) -> InlineKeyboardMarkup:
+    region_btns = [
+        kb_btn(f"{cfg['emoji']} {cfg['title']}", f"live:{kind}:{key}") for key, cfg in REGIONS.items()
+    ]
+    rows = _pairs(region_btns)
+    if kind == "heli":
+        rows.append(
+            [
+                kb_btn("✈️ Tutti gli aerei", f"live:ac:{region}"),
+                kb_btn("🔄 Aggiorna", f"live:heli:{region}"),
+            ]
+        )
+    else:
+        rows.append(
+            [
+                kb_btn("🚁 Solo elicotteri", f"live:heli:{region}"),
+                kb_btn("🔄 Aggiorna", f"live:ac:{region}"),
+            ]
+        )
+    rows.append([kb_btn("⚓ Navi", "live:ships"), kb_btn("🛰️ ISS", "live:iss")])
+    rows.append([kb_btn("📡 Hub live", "home:live")])
+    rows.append(nav_row())
+    return InlineKeyboardMarkup(rows)
+
+
+def live_misc_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [kb_btn("🔄 Aggiorna", token), kb_btn("✈️ Aerei", "live:ac:it")],
+            [kb_btn("⚓ Navi", "live:ships"), kb_btn("🛰️ ISS", "live:iss")],
+            [kb_btn("📡 Hub live", "home:live")],
+            nav_row(),
+        ]
+    )

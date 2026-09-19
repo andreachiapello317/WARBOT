@@ -10,6 +10,7 @@ I testi sono enciclopedia pubblica, non un manuale operativo.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import os
@@ -42,6 +43,16 @@ from services.catalog import (
     random_item,
     search,
 )
+from services.live import (
+    REGIONS,
+    fetch_aircraft,
+    fetch_iss,
+    fetch_ships,
+    format_aircraft,
+    format_iss,
+    format_live_hub,
+    format_ships,
+)
 from services.models import DISCLAIMER, ERA_LABELS
 from services.quiz import build_quiz, format_question
 from ui.keyboards import (
@@ -51,7 +62,9 @@ from ui.keyboards import (
     esplora_keyboard,
     home_keyboard,
     list_keyboard,
-    nav_row,
+    live_hub_keyboard,
+    live_misc_keyboard,
+    live_region_keyboard,
     quiz_hub_keyboard,
     quiz_options_keyboard,
     rank_scale_keyboard,
@@ -377,6 +390,12 @@ async def open_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token: 
         if action == "aiuto":
             await reply_html(update, context, help_text(), reply_markup=back_home_keyboard())
             return
+        if action == "live":
+            await show_live_hub(update, context)
+            return
+    if prefix == "live":
+        await open_live(update, context, action, extra)
+        return
     if prefix == "e" and action:
         await show_entity(update, context, action)
         return
@@ -482,6 +501,114 @@ async def cmd_oggi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_casuale(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _cmd_begin(context, "home:random")
     await show_entity(update, context, random_item()["id"])
+    await delete_user_command(update)
+
+
+def _live_region(raw: str | None) -> str:
+    key = (raw or "it").strip().lower()
+    aliases = {"italia": "it", "italy": "it", "mediterraneo": "med", "europa": "eu", "manica": "uk", "usa": "us", "giappone": "jp", "japan": "jp"}
+    key = aliases.get(key, key)
+    return key if key in REGIONS else "it"
+
+
+async def show_live_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await reply_html(update, context, format_live_hub(), reply_markup=live_hub_keyboard())
+
+
+async def show_live_aircraft(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    region: str,
+    *,
+    heli: bool = False,
+) -> None:
+    region = _live_region(region)
+    kind = "heli" if heli else "ac"
+    await reply_html(
+        update,
+        context,
+        "📡 <b>LIVE</b>\n\nInterrogo ADS-B pubblico…",
+        reply_markup=live_region_keyboard(kind, region),
+    )
+    bundle = await asyncio.to_thread(fetch_aircraft, region)
+    await reply_html(
+        update,
+        context,
+        format_aircraft(bundle, heli_only=heli),
+        reply_markup=live_region_keyboard(kind, region),
+    )
+
+
+async def show_live_ships(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await reply_html(
+        update,
+        context,
+        "📡 <b>LIVE</b>\n\nInterrogo AIS aperto del Baltico…",
+        reply_markup=live_misc_keyboard("live:ships"),
+    )
+    bundle = await asyncio.to_thread(fetch_ships)
+    await reply_html(update, context, format_ships(bundle), reply_markup=live_misc_keyboard("live:ships"))
+
+
+async def show_live_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await reply_html(
+        update,
+        context,
+        "📡 <b>LIVE</b>\n\nChiedo coordinate alla stazione…",
+        reply_markup=live_misc_keyboard("live:iss"),
+    )
+    bundle = await asyncio.to_thread(fetch_iss)
+    await reply_html(update, context, format_iss(bundle), reply_markup=live_misc_keyboard("live:iss"))
+
+
+async def open_live(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, extra: str) -> None:
+    if action in {"hub", ""}:
+        await show_live_hub(update, context)
+        return
+    if action == "ac":
+        await show_live_aircraft(update, context, extra or "it")
+        return
+    if action == "heli":
+        await show_live_aircraft(update, context, extra or "it", heli=True)
+        return
+    if action in {"ships", "navi"}:
+        await show_live_ships(update, context)
+        return
+    if action == "iss":
+        await show_live_iss(update, context)
+        return
+    await show_live_hub(update, context)
+
+
+async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _cmd_begin(context, "home:live")
+    await show_live_hub(update, context)
+    await delete_user_command(update)
+
+
+async def cmd_aerei(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    region = _live_region(context.args[0] if context.args else "it")
+    _cmd_begin(context, f"live:ac:{region}")
+    await show_live_aircraft(update, context, region)
+    await delete_user_command(update)
+
+
+async def cmd_elicotteri(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    region = _live_region(context.args[0] if context.args else "it")
+    _cmd_begin(context, f"live:heli:{region}")
+    await show_live_aircraft(update, context, region, heli=True)
+    await delete_user_command(update)
+
+
+async def cmd_navi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _cmd_begin(context, "live:ships")
+    await show_live_ships(update, context)
+    await delete_user_command(update)
+
+
+async def cmd_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _cmd_begin(context, "live:iss")
+    await show_live_iss(update, context)
     await delete_user_command(update)
 
 
@@ -593,6 +720,10 @@ async def post_init(application: Application) -> None:
                 BotCommand("quiz", "Quiz storico"),
                 BotCommand("oggi", "Scheda del giorno"),
                 BotCommand("casuale", "Una scheda a caso"),
+                BotCommand("live", "Aerei, navi, ISS in diretta"),
+                BotCommand("aerei", "ADS-B pubblico su una zona"),
+                BotCommand("navi", "AIS aperto del Baltico"),
+                BotCommand("iss", "Posizione della stazione spaziale"),
                 BotCommand("aiuto", "Elenco comandi"),
             ]
         )
@@ -621,9 +752,15 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler("quiz", cmd_quiz))
     application.add_handler(CommandHandler("oggi", cmd_oggi))
     application.add_handler(CommandHandler(["casuale", "random"], cmd_casuale))
+    application.add_handler(CommandHandler(["live", "adsb", "ais"], cmd_live))
+    application.add_handler(CommandHandler(["aerei", "aircraft"], cmd_aerei))
+    application.add_handler(CommandHandler(["elicotteri", "eli"], cmd_elicotteri))
+    application.add_handler(CommandHandler(["navi", "ships"], cmd_navi))
+    application.add_handler(CommandHandler("iss", cmd_iss))
     application.add_handler(CallbackQueryHandler(on_nav_action, pattern=r"^nav:"))
     application.add_handler(CallbackQueryHandler(on_world_action, pattern=r"^world:"))
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^home:"))
+    application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^live:"))
     application.add_handler(CallbackQueryHandler(on_entity_action, pattern=r"^(e|s|l|rnd):"))
     application.add_handler(CallbackQueryHandler(on_quiz_tap, pattern=r"^q"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_plain_text))

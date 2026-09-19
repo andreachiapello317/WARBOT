@@ -17,6 +17,7 @@ def home_text() -> str:
         "🕊️ <b>PATTI</b> — trattati, personaggi, strategia come storia\n\n"
         "📖 <b>OGGI</b> pesca una scheda del giorno.\n"
         "🎲 <b>CASUALE</b> apre un cassetto a caso.\n"
+        "📡 <b>LIVE</b> mostra aerei, navi e ISS sulle radio aperte, adesso.\n\n"
         f"<i>{DISCLAIMER}</i>"
     )
 
@@ -87,6 +88,10 @@ def help_text() -> str:
         "/quiz — indovina guerra, battaglia, grado…\n"
         "/oggi — scheda del giorno\n"
         "/casuale — un cassetto a caso\n"
+        "/live — aerei, navi, ISS in diretta (radio pubbliche)\n"
+        "/aerei — ADS-B su una zona (it, med, eu, uk, us, jp)\n"
+        "/navi — AIS aperto del Baltico finlandese\n"
+        "/iss — stazione spaziale, lat/lon/altezza\n"
         "/aiuto — questo elenco\n\n"
         "Ogni schermata ha ⬅️ Indietro e 🏠 Inizio.\n"
         "Un solo messaggio in chat: i bottoni lo aggiornano.\n\n"

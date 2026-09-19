@@ -15,7 +15,20 @@ Non è un manuale operativo. I testi descrivono guerre, eserciti, mezzi e tratta
 | ⚙️ **Ferro** | Equipaggiamento, mezzi, fortificazioni, spazio militare |
 | 🕊️ **Patti** | Trattati, pace, personaggi, strategia come storia |
 
-In home: **Oggi**, **Casuale**, **Cerca**, **Quiz**, **Esplora**.
+In home: **Oggi**, **Casuale**, **Cerca**, **Quiz**, **Live**, **Esplora**.
+
+## Live (aerei, navi, ISS)
+
+Quadro **📡 Live**: posizioni vere, adesso, da radio aperte. Non è un radar militare e non serve a inseguire bersagli.
+
+| Feed | Fonte | Cosa vedi |
+| --- | --- | --- |
+| ✈️ Aerei | ADS-B pubblico (adsb.fi) | Zone: Italia, Mediterraneo, Europa, Manica, costa est USA, Giappone |
+| 🚁 Elicotteri | stesso ADS-B, categoria eli | Stesse zone |
+| ⚓ Navi | AIS aperto Digitraffic (Finlandia) | Mar Baltico / acque finlandesi — un mare vero, non un AIS mondiale |
+| 🛰️ ISS | wheretheiss.at | Lat/lon, altezza, velocità |
+
+Nel museo web: `/live`, `/live/ac`, `/live/navi`, `/live/iss` (mappa OpenStreetMap) e `/live.json`.
 
 ## Architettura
 
@@ -24,7 +37,7 @@ bot.py              Telegram: nav, un solo messaggio, webhook/polling
 museum.py           Museo web sugli stessi cataloghi (anteprima)
 ui/keyboards.py     Tastiere inline
 ui/texts.py         Testi di interfaccia
-services/           Schede per mondo + ricerca + quiz
+services/           Schede per mondo + ricerca + quiz + live ADS-B/AIS
 ```
 
 Callback come nel bot a mondi: `world:epoche`, `e:stlg`, `l:war:ant`, `q:bat`, `nav:back`, `home:menu`.
@@ -44,7 +57,7 @@ Museo nel browser (senza token):
 python museum.py
 ```
 
-Apri `http://127.0.0.1:47261`.
+Apri `http://127.0.0.1:47261`. Live: `http://127.0.0.1:47261/live`.
 
 Bot Telegram: metti `TELEGRAM_BOT_TOKEN` in `.env`, poi:
 
@@ -69,6 +82,10 @@ cerca - Ricerca universale
 quiz - Quiz storico
 oggi - Scheda del giorno
 casuale - Una scheda a caso
+live - Aerei, navi, ISS in diretta
+aerei - ADS-B pubblico su una zona
+navi - AIS aperto del Baltico
+iss - Posizione della stazione spaziale
 aiuto - Elenco comandi
 ```
 
