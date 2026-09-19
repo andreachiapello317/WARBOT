@@ -27,10 +27,12 @@ CENTER = (45.464, 9.19)
 
 class QueryBuilderTest(unittest.TestCase):
     def test_endpoint_overpass_primary(self) -> None:
-        self.assertEqual(OVERPASS_URL, "https://overpass.osm.ch/api/interpreter")
+        self.assertEqual(OVERPASS_URL, "https://overpass-api.de/api/interpreter")
         self.assertEqual(OVERPASS_FALLBACK_URLS[0], OVERPASS_URL)
-        self.assertIn("overpass-api.de", OVERPASS_FALLBACK_URLS[1])
+        self.assertIn("lz4.overpass-api.de", OVERPASS_FALLBACK_URLS[1])
         self.assertIn("maps.mail.ru", OVERPASS_FALLBACK_URLS[2])
+        self.assertNotIn("overpass.osm.ch", OVERPASS_URL)
+        self.assertTrue(all("overpass.osm.ch" not in u for u in OVERPASS_FALLBACK_URLS))
 
     def test_error_hides_http_status(self) -> None:
         text = format_osm_category({"ok": False, "error": "HTTP 404"}, {"name": "Milano"})
@@ -172,15 +174,20 @@ class CuneoLandmarkTest(unittest.TestCase):
 
 class OverpassRemarkTest(unittest.TestCase):
     def test_timeout_remark_is_failure(self) -> None:
-        from services.live.osm import _overpass_failed_remark
+        from services.live.osm import _overpass_dead_replica, _overpass_failed_remark
 
         self.assertTrue(_overpass_failed_remark({"remark": "runtime error: Query timed out in query"}))
         self.assertFalse(_overpass_failed_remark({"elements": []}))
         self.assertFalse(_overpass_failed_remark({"remark": ""}))
+        self.assertTrue(_overpass_dead_replica({"osm3s": {"timestamp_osm_base": "117135"}, "elements": []}))
+        self.assertFalse(
+            _overpass_dead_replica({"osm3s": {"timestamp_osm_base": "2026-09-19T21:44:02Z"}, "elements": []})
+        )
+        self.assertFalse(_overpass_dead_replica({"elements": []}))
 
 
 class OverpassEmptyFailoverTest(unittest.TestCase):
-    def test_empty_payload_tries_next_host(self) -> None:
+    def test_dead_replica_tries_next_host(self) -> None:
         from services.live.osm import overpass
 
         class FakeResp:
@@ -202,9 +209,10 @@ class OverpassEmptyFailoverTest(unittest.TestCase):
             url = getattr(req, "full_url", None) or req.get_full_url()
             calls.append(str(url))
             if len(calls) == 1:
-                return FakeResp(b'{"elements":[]}')
+                return FakeResp(b'{"osm3s":{"timestamp_osm_base":"117135"},"elements":[]}')
             return FakeResp(
-                b'{"elements":[{"type":"way","id":211123357,"center":{"lat":44.383,"lon":7.534},'
+                b'{"osm3s":{"timestamp_osm_base":"2026-09-19T00:00:00Z"},'
+                b'"elements":[{"type":"way","id":211123357,"center":{"lat":44.383,"lon":7.534},'
                 b'"tags":{"leisure":"stadium","name":"Stadio Fratelli Paschiero","sport":"soccer"}}]}'
             )
 
@@ -216,6 +224,37 @@ class OverpassEmptyFailoverTest(unittest.TestCase):
         self.assertTrue(payload.get("ok"))
         self.assertEqual(len(payload.get("elements") or []), 1)
         self.assertEqual(len(calls), 2)
+
+    def test_authentic_empty_does_not_call_next_host(self) -> None:
+        from services.live.osm import overpass
+
+        class FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        calls: list[str] = []
+
+        def fake_urlopen(req, timeout=0):
+            calls.append("hit")
+            return FakeResp(b'{"osm3s":{"timestamp_osm_base":"2026-09-19T00:00:00Z"},"elements":[]}')
+
+        with (
+            patch("services.live.osm._overpass_urls", return_value=["http://empty.test/x", "http://full.test/x"]),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            payload = overpass("[out:json];out;")
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload.get("elements"), [])
+        self.assertEqual(len(calls), 1)
 
     def test_peek_skips_empty_cache(self) -> None:
         from services.live import cache as osm_cache

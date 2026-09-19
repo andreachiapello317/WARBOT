@@ -6,7 +6,7 @@ Fonti (principi, non esempi copiati):
 - Overpass API / Overpass QL, wiki OSM
 - Wizard di Turbo solo come modello AND/OR; Turbo non è l'endpoint.
 
-WARBOT → questo compiler → Overpass API (overpass.osm.ch, failover de / mail.ru).
+WARBOT → questo compiler → Overpass API (overpass-api.de, failover lz4 / mail.ru).
 Niente scorciatoie Turbo ({{bbox}}, {{geocodeArea}}, {{center}}).
 """
 

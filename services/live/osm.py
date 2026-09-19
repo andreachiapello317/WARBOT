@@ -33,23 +33,25 @@ log = logging.getLogger("warbot.osm")
 
 TELEGRAM_MAX_LEN = 3900
 
-OVERPASS_URL = "https://overpass.osm.ch/api/interpreter"
+# osm.ch risponde 200 con elements=[] e timestamp_osm_base="117135" (replica vuota).
+# Non usarlo: maschera i dati veri e avvelena il failover.
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_FALLBACK_URLS = (
-    "https://overpass.osm.ch/api/interpreter",
     "https://overpass-api.de/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 )
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
-DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 8, lo=5, hi=20)
-QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 10, lo=6, hi=25)
-FIRST_HOST_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_FIRST_TIMEOUT", 6, lo=4, hi=12)
+DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 14, lo=8, hi=25)
+QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 16, lo=8, hi=25)
+FIRST_HOST_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_FIRST_TIMEOUT", 12, lo=8, hi=20)
 OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "32"
+QUERY_VER = "33"
 DEDUP_METERS = 180
-HOST_COOLDOWN = 180
+HOST_COOLDOWN = 45
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -1129,15 +1131,31 @@ def _overpass_failed_remark(payload: dict[str, Any]) -> bool:
     return any(bit in remark for bit in ("timeout", "error", "out of memory"))
 
 
+def _osm3s_timestamp(payload: dict[str, Any]) -> str:
+    osm3s = payload.get("osm3s")
+    if not isinstance(osm3s, dict):
+        return ""
+    return str(osm3s.get("timestamp_osm_base") or "").strip()
+
+
+def _overpass_dead_replica(payload: dict[str, Any]) -> bool:
+    """Replica inutilizzabile: osm.ch oggi manda timestamp_osm_base='117135' e elements=[]."""
+    ts = _osm3s_timestamp(payload)
+    if not ts:
+        return False
+    # Dump vero: 2026-09-19T21:44:02Z
+    return not (len(ts) >= 10 and ts[0:4].isdigit() and "T" in ts)
+
+
 def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """POST application/x-www-form-urlencoded, parametro data=. Timeout: stop, Riprova manuale.
 
-    200 con elements=[] non è un successo: si passa al prossimo interpreter.
+    Replica morta (timestamp OSM non-data) o 5xx/timeout: prossimo interpreter.
+    200 vuoto con timestamp reale = zona vuota.
     """
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
     last_error = "Overpass non ha risposto"
     last_detail = ""
-    last_empty: dict[str, Any] | None = None
     urls = _overpass_urls()
     for index, url in enumerate(urls):
         host = urllib.parse.urlparse(url).netloc or "overpass"
@@ -1174,6 +1192,7 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
                 last_error = "Overpass non raggiungibile"
                 last_detail = str(exc.reason or exc)
                 log.warning("overpass unreachable host=%s", host)
+                _mark_host(host, ok=False)
             else:
                 try:
                     payload = json.loads(raw.decode("utf-8"))
@@ -1192,20 +1211,18 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
                     log.warning("overpass remark host=%s", host)
                     _mark_host(host, ok=False)
                     break
-                payload.setdefault("elements", [])
-                if not payload.get("elements"):
-                    log.info("overpass empty host=%s try_next=%s", host, index < len(urls) - 1)
-                    last_empty = payload
+                if _overpass_dead_replica(payload):
+                    last_error = "replica Overpass vuota"
+                    last_detail = _osm3s_timestamp(payload)
+                    log.warning("overpass dead_replica host=%s ts=%s", host, last_detail)
+                    _mark_host(host, ok=False)
                     break
+                payload.setdefault("elements", [])
                 payload["ok"] = True
                 _mark_host(host, ok=True)
                 return payload
             if attempt < OVERPASS_RETRIES - 1:
                 time.sleep(0.4 * (attempt + 1))
-    if last_empty is not None:
-        last_empty["ok"] = True
-        last_empty.setdefault("elements", [])
-        return last_empty
     return {"ok": False, "error": last_error, "detail": last_detail, "elements": [], "retry": True}
 
 
