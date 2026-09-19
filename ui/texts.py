@@ -1,22 +1,19 @@
-"""Testi di interfaccia WARBOT live."""
+"""Testi di interfaccia OSM WORLD."""
 
-from services.live import LIVE_NOTE
+from services.live.osm import OSM_NOTE
 
 
 def help_text() -> str:
     return (
-        "📡 <b>WARBOT live</b>\n\n"
-        "Posizioni vere, adesso. Feed pubblici: niente radar militare.\n\n"
-        "/start — hub: ISS, aerei sull'Italia, navi del Baltico\n"
-        "/live — stesso hub, aggiornato\n"
-        "/osm — 🌍 OSM WORLD: scrivi una città, poi le categorie\n"
-        "/osm Tokyo — cerca subito una località\n"
-        "/aerei — ADS-B su una zona (it, med, eu, uk, us, jp)\n"
-        "/elicotteri — stesso ADS-B, solo eli\n"
-        "/navi — AIS aperto del Baltico finlandese\n"
-        "/iss — quota, velocità, mappa della stazione\n"
+        "🌍 <b>OSM WORLD</b>\n\n"
+        "Cerca una località, poi una categoria. Overpass parte solo quando tocchi.\n\n"
+        "/start — cerca una città\n"
+        "/osm Tokyo — vai dritto a Tokyo\n"
         "/aiuto — questo elenco\n\n"
+        "✈️ Aeroporti · 🚆 Stazioni ferroviarie · 🏥 Ospedali\n"
+        "⚓ Porti · 🏟️ Stadi · 🏛️ Luoghi · 🛍️ Centri · 🗺️ Mappa\n\n"
+        "Le stazioni sono treni (train=yes / UIC / train_station), non metro o fermate.\n\n"
         "Ogni schermata ha ⬅️ Indietro e 🏠 Inizio.\n"
         "Un solo messaggio in chat: i bottoni lo aggiornano.\n\n"
-        f"<i>{LIVE_NOTE}</i>"
+        f"<i>{OSM_NOTE}</i>"
     )

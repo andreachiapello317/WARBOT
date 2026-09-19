@@ -1,10 +1,9 @@
-"""Tastiere inline del live: hub, zone, navi, ISS, OSM WORLD."""
+"""Tastiere inline OSM WORLD."""
 
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from services.live import REGIONS
 from services.live.osm import CATEGORIES, LIST_LIMIT, WORLD_CATEGORIES
 
 
@@ -33,24 +32,11 @@ def back_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([nav_row()])
 
 
-def live_hub_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [kb_btn("🔄 Aggiorna posizioni", "home:live")],
-            [kb_btn("✈️ Aerei Italia", "live:ac:it"), kb_btn("🌊 Mediterraneo", "live:ac:med")],
-            [kb_btn("🚁 Elicotteri", "live:heli:it"), kb_btn("⚓ Navi Baltico", "live:ships")],
-            [kb_btn("🛰️ Mappa ISS", "live:iss"), kb_btn("🌍 OSM WORLD", "live:ow")],
-            [kb_btn("❓ Aiuto", "home:aiuto")],
-        ]
-    )
-
-
 def osm_world_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [kb_btn("🔎 Cerca località", "live:ow")],
-            [kb_btn("📡 Posizioni live", "home:live")],
-            nav_row(),
+            [kb_btn("❓ Aiuto", "home:aiuto")],
         ]
     )
 
@@ -71,7 +57,6 @@ def osm_place_keyboard() -> InlineKeyboardMarkup:
     rows = _pairs(buttons)
     rows.append([kb_btn("🗺️ Mappa", "live:ow:map")])
     rows.append([kb_btn("🔎 Cerca un'altra località", "live:ow")])
-    rows.append([kb_btn("📡 Posizioni live", "home:live")])
     rows.append(nav_row())
     return InlineKeyboardMarkup(rows)
 
@@ -92,42 +77,6 @@ def osm_item_keyboard() -> InlineKeyboardMarkup:
             [kb_btn("📋 Lista", "live:ow:list"), kb_btn("📍 Località", "live:ow:here")],
             [kb_btn("🗺️ Mappa", "live:ow:map")],
             [kb_btn("🔎 Cerca un'altra località", "live:ow")],
-            nav_row(),
-        ]
-    )
-
-
-def live_region_keyboard(kind: str, region: str) -> InlineKeyboardMarkup:
-    region_btns = [
-        kb_btn(f"{cfg['emoji']} {cfg['title']}", f"live:{kind}:{key}") for key, cfg in REGIONS.items()
-    ]
-    rows = _pairs(region_btns)
-    if kind == "heli":
-        rows.append(
-            [
-                kb_btn("✈️ Tutti gli aerei", f"live:ac:{region}"),
-                kb_btn("🔄 Aggiorna", f"live:heli:{region}"),
-            ]
-        )
-    else:
-        rows.append(
-            [
-                kb_btn("🚁 Solo elicotteri", f"live:heli:{region}"),
-                kb_btn("🔄 Aggiorna", f"live:ac:{region}"),
-            ]
-        )
-    rows.append([kb_btn("⚓ Navi", "live:ships"), kb_btn("🛰️ ISS", "live:iss")])
-    rows.append([kb_btn("📡 Posizioni live", "home:live")])
-    rows.append(nav_row())
-    return InlineKeyboardMarkup(rows)
-
-
-def live_misc_keyboard(token: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [kb_btn("🔄 Aggiorna", token), kb_btn("✈️ Aerei", "live:ac:it")],
-            [kb_btn("⚓ Navi", "live:ships"), kb_btn("🛰️ ISS", "live:iss")],
-            [kb_btn("📡 Posizioni live", "home:live")],
             nav_row(),
         ]
     )

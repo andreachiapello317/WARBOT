@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-WARBOT — posizioni live su Telegram.
+WARBOT — OSM WORLD su Telegram.
 
 Un solo messaggio in chat: tastiere inline, callback a prefisso,
-Indietro/Inizio, webhook o polling. Aerei (ADS-B), navi (AIS), ISS.
+Indietro/Inizio, webhook o polling.
 """
 
 from __future__ import annotations
@@ -27,20 +27,9 @@ from telegram.ext import (
     filters,
 )
 
-from services.live import (
-    REGIONS,
-    clip,
-    fetch_aircraft,
-    fetch_hub,
-    fetch_iss,
-    fetch_ships,
-    format_aircraft,
-    format_iss,
-    format_live_hub,
-    format_ships,
-)
 from services.live.geocode import geocode
 from services.live.osm import (
+    clip,
     format_osm_category,
     format_osm_hits,
     format_osm_item,
@@ -52,9 +41,6 @@ from services.live.osm import (
 )
 from ui.keyboards import (
     back_home_keyboard,
-    live_hub_keyboard,
-    live_misc_keyboard,
-    live_region_keyboard,
     osm_category_keyboard,
     osm_hits_keyboard,
     osm_item_keyboard,
@@ -71,7 +57,7 @@ NAV_MAX = 24
 EMPTY_KEYBOARD = InlineKeyboardMarkup([])
 
 NAV_SKIP_EXACT = frozenset({"nav:back", "home:menu"})
-NAV_HOME_TOKENS = frozenset({"home:menu", "home:live"})
+NAV_HOME_TOKENS = frozenset({"home:menu", "live:ow"})
 OSM_WAIT_KEY = "osm_wait_text"
 OSM_PLACE_KEY = "osm_place"
 OSM_HITS_KEY = "osm_hits"
@@ -177,14 +163,12 @@ async def reply_html(
 
 
 def _nav_should_skip(token: str) -> bool:
-    if not token or token in NAV_SKIP_EXACT:
-        return True
-    return False
+    return (not token) or token in NAV_SKIP_EXACT
 
 
 def nav_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data[NAV_STACK_KEY] = []
-    context.user_data[NAV_HERE_KEY] = "home:live"
+    context.user_data[NAV_HERE_KEY] = "live:ow"
 
 
 def nav_mark(context: ContextTypes.DEFAULT_TYPE, token: str) -> None:
@@ -210,11 +194,11 @@ def nav_mark(context: ContextTypes.DEFAULT_TYPE, token: str) -> None:
 def nav_pop(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     stack = context.user_data.get(NAV_STACK_KEY)
     if not isinstance(stack, list) or not stack:
-        context.user_data[NAV_HERE_KEY] = "home:live"
+        context.user_data[NAV_HERE_KEY] = "live:ow"
         return None
     token = stack.pop()
     context.user_data[NAV_STACK_KEY] = stack
-    context.user_data[NAV_HERE_KEY] = token if token else "home:live"
+    context.user_data[NAV_HERE_KEY] = token if token else "live:ow"
     return token if isinstance(token, str) and token else None
 
 
@@ -231,149 +215,6 @@ def _remember_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         nav_mark(context, query.data)
 
 
-def _live_region(raw: str | None) -> str:
-    key = (raw or "it").strip().lower()
-    aliases = {
-        "italia": "it",
-        "italy": "it",
-        "mediterraneo": "med",
-        "europa": "eu",
-        "manica": "uk",
-        "usa": "us",
-        "giappone": "jp",
-        "japan": "jp",
-    }
-    key = aliases.get(key, key)
-    return key if key in REGIONS else "it"
-
-
-async def show_live_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_html(
-        update,
-        context,
-        "📡 <b>POSIZIONI LIVE</b>\n\nInterrogo aerei, navi e la stazione spaziale…",
-        reply_markup=live_hub_keyboard(),
-    )
-    snapshot = await asyncio.to_thread(fetch_hub)
-    await reply_html(
-        update,
-        context,
-        format_live_hub(snapshot),
-        reply_markup=live_hub_keyboard(),
-        preview=True,
-    )
-
-
-async def show_live_aircraft(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    region: str,
-    *,
-    heli: bool = False,
-) -> None:
-    region = _live_region(region)
-    kind = "heli" if heli else "ac"
-    await reply_html(
-        update,
-        context,
-        "📡 <b>LIVE</b>\n\nInterrogo ADS-B pubblico…",
-        reply_markup=live_region_keyboard(kind, region),
-    )
-    bundle = await asyncio.to_thread(fetch_aircraft, region)
-    await reply_html(
-        update,
-        context,
-        format_aircraft(bundle, heli_only=heli),
-        reply_markup=live_region_keyboard(kind, region),
-        preview=True,
-    )
-
-
-async def show_live_ships(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_html(
-        update,
-        context,
-        "📡 <b>LIVE</b>\n\nInterrogo AIS aperto del Baltico…",
-        reply_markup=live_misc_keyboard("live:ships"),
-    )
-    bundle = await asyncio.to_thread(fetch_ships)
-    await reply_html(
-        update,
-        context,
-        format_ships(bundle),
-        reply_markup=live_misc_keyboard("live:ships"),
-        preview=True,
-    )
-
-
-async def show_live_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_html(
-        update,
-        context,
-        "📡 <b>LIVE</b>\n\nChiedo coordinate alla stazione…",
-        reply_markup=live_misc_keyboard("live:iss"),
-    )
-    bundle = await asyncio.to_thread(fetch_iss)
-    await reply_html(update, context, format_iss(bundle), reply_markup=live_misc_keyboard("live:iss"), preview=True)
-
-
-async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_html(update, context, help_text(), reply_markup=back_home_keyboard())
-
-
-async def open_live(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, extra: str) -> None:
-    if action in {"hub", ""}:
-        await show_live_hub(update, context)
-        return
-    if action == "ac":
-        await show_live_aircraft(update, context, extra or "it")
-        return
-    if action == "heli":
-        await show_live_aircraft(update, context, extra or "it", heli=True)
-        return
-    if action in {"ships", "navi"}:
-        await show_live_ships(update, context)
-        return
-    if action == "iss":
-        await show_live_iss(update, context)
-        return
-    if action in {"osm", "ow"}:
-        await open_ow(update, context, extra)
-        return
-    await show_live_hub(update, context)
-
-
-async def open_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token: str) -> None:
-    if not token or token in NAV_HOME_TOKENS:
-        await show_live_hub(update, context)
-        return
-    prefix, _, rest = token.partition(":")
-    action, _, extra = rest.partition(":")
-
-    if prefix == "home":
-        if action == "aiuto":
-            await show_help(update, context)
-            return
-        await show_live_hub(update, context)
-        return
-    if prefix == "live":
-        await open_live(update, context, action, extra)
-        return
-    await show_live_hub(update, context)
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _cmd_begin(context, "home:live")
-    await show_live_hub(update, context)
-    await delete_user_command(update)
-
-
-async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _cmd_begin(context, "home:aiuto")
-    await show_help(update, context)
-    await delete_user_command(update)
-
-
 def _osm_place(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
     place = context.user_data.get(OSM_PLACE_KEY)
     return place if isinstance(place, dict) and "lat" in place else None
@@ -381,6 +222,11 @@ def _osm_place(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
 
 def _set_osm_wait(context: ContextTypes.DEFAULT_TYPE, waiting: bool) -> None:
     context.user_data[OSM_WAIT_KEY] = waiting
+
+
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _set_osm_wait(context, False)
+    await reply_html(update, context, help_text(), reply_markup=back_home_keyboard())
 
 
 async def show_osm_world(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -465,11 +311,10 @@ async def show_osm_item(update: Update, context: ContextTypes.DEFAULT_TYPE, inde
             return
         await show_osm_place(update, context)
         return
-    row = rows[index]
     await reply_html(
         update,
         context,
-        format_osm_item(row, _osm_place(context)),
+        format_osm_item(rows[index], _osm_place(context)),
         reply_markup=osm_item_keyboard(),
         preview=True,
     )
@@ -523,7 +368,6 @@ async def open_ow(update: Update, context: ContextTypes.DEFAULT_TYPE, extra: str
     if kind == "list":
         await show_osm_list(update, context)
         return
-    # legacy live:osm:milano → ricerca libera
     query = extra.replace(":", " ").strip()
     if query and query not in {"q", "search"}:
         await osm_lookup(update, context, query)
@@ -531,33 +375,50 @@ async def open_ow(update: Update, context: ContextTypes.DEFAULT_TYPE, extra: str
     await show_osm_world(update, context)
 
 
+async def open_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token: str) -> None:
+    if not token or token in NAV_HOME_TOKENS:
+        await show_osm_world(update, context)
+        return
+    prefix, _, rest = token.partition(":")
+    action, _, extra = rest.partition(":")
+    if prefix == "home":
+        if action == "aiuto":
+            await show_help(update, context)
+            return
+        await show_osm_world(update, context)
+        return
+    if prefix == "live":
+        if action in {"ow", "osm", "hub", ""}:
+            await open_ow(update, context, extra if action in {"ow", "osm"} else "")
+            return
+        await show_osm_world(update, context)
+        return
+    await show_osm_world(update, context)
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _cmd_begin(context, "live:ow")
+    await show_osm_world(update, context)
+    await delete_user_command(update)
+
+
+async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _cmd_begin(context, "home:aiuto")
+    await show_help(update, context)
+    await delete_user_command(update)
+
+
 async def cmd_osm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = [a.strip() for a in (context.args or []) if a.strip()]
+    _cmd_begin(context, "live:ow")
     if args:
-        query = " ".join(args)
-        _cmd_begin(context, "live:ow")
-        await osm_lookup(update, context, query)
+        await osm_lookup(update, context, " ".join(args))
     else:
-        _cmd_begin(context, "live:ow")
         await show_osm_world(update, context)
     await delete_user_command(update)
 
 
-async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    args = [a.strip() for a in (context.args or []) if a.strip()]
-    if args:
-        _cmd_begin(context, "live:ow")
-        await osm_lookup(update, context, " ".join(args))
-        await delete_user_command(update)
-        return
-    _cmd_begin(context, "home:live")
-    await show_live_hub(update, context)
-    await delete_user_command(update)
-
-
 async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.user_data.get(OSM_WAIT_KEY):
-        return
     message = update.effective_message
     if message is None or not message.text:
         return
@@ -566,32 +427,6 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     _cmd_begin(context, "live:ow")
     await osm_lookup(update, context, query)
-    await delete_user_command(update)
-
-
-async def cmd_aerei(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    region = _live_region(context.args[0] if context.args else "it")
-    _cmd_begin(context, f"live:ac:{region}")
-    await show_live_aircraft(update, context, region)
-    await delete_user_command(update)
-
-
-async def cmd_elicotteri(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    region = _live_region(context.args[0] if context.args else "it")
-    _cmd_begin(context, f"live:heli:{region}")
-    await show_live_aircraft(update, context, region, heli=True)
-    await delete_user_command(update)
-
-
-async def cmd_navi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _cmd_begin(context, "live:ships")
-    await show_live_ships(update, context)
-    await delete_user_command(update)
-
-
-async def cmd_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _cmd_begin(context, "live:iss")
-    await show_live_iss(update, context)
     await delete_user_command(update)
 
 
@@ -612,7 +447,7 @@ async def on_nav_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _remember_from_callback(update, context)
     token = nav_pop(context)
     if not token:
-        await show_live_hub(update, context)
+        await show_osm_world(update, context)
         return
     await open_token(update, context, token)
 
@@ -621,7 +456,7 @@ async def on_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await reply_html(
         update,
         context,
-        "Comando sconosciuto. /aiuto · /osm per il mondo OSM.",
+        "Comando sconosciuto. /start oppure scrivi una città.",
         reply_markup=back_home_keyboard(),
     )
 
@@ -634,7 +469,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
                 update,
                 context,
                 "Qualcosa si è inceppato. Riprova da /start.",
-                reply_markup=live_hub_keyboard(),
+                reply_markup=osm_world_keyboard(),
             )
         except Exception:
             pass
@@ -644,31 +479,21 @@ async def post_init(application: Application) -> None:
     try:
         await application.bot.set_my_commands(
             [
-                BotCommand("start", "Posizioni live: aerei, navi, ISS"),
-                BotCommand("live", "Hub: ISS, aerei, navi"),
-                BotCommand("osm", "OSM WORLD: cerca una località"),
-                BotCommand("aerei", "Aerei in volo su una zona"),
-                BotCommand("elicotteri", "Solo elicotteri, stessa zona"),
-                BotCommand("navi", "Navi AIS del Baltico"),
-                BotCommand("iss", "Mappa della stazione spaziale"),
-                BotCommand("aiuto", "Elenco comandi"),
+                BotCommand("start", "OSM WORLD: cerca una località"),
+                BotCommand("osm", "OSM WORLD"),
+                BotCommand("aiuto", "Come funziona"),
             ]
         )
     except TelegramError as exc:
         logger.warning("Impossibile impostare i comandi: %s", exc)
-    logger.info("WARBOT live inizializzato")
+    logger.info("OSM WORLD inizializzato")
 
 
 def build_application(token: str) -> Application:
     application = Application.builder().token(token).post_init(post_init).build()
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler(["aiuto", "help"], cmd_aiuto))
-    application.add_handler(CommandHandler(["live", "adsb", "ais"], cmd_live))
-    application.add_handler(CommandHandler(["osm", "overpass"], cmd_osm))
-    application.add_handler(CommandHandler(["aerei", "aircraft"], cmd_aerei))
-    application.add_handler(CommandHandler(["elicotteri", "eli"], cmd_elicotteri))
-    application.add_handler(CommandHandler(["navi", "ships"], cmd_navi))
-    application.add_handler(CommandHandler("iss", cmd_iss))
+    application.add_handler(CommandHandler(["osm", "live", "overpass"], cmd_osm))
     application.add_handler(CallbackQueryHandler(on_nav_action, pattern=r"^nav:"))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^home:"))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^live:"))
@@ -683,7 +508,7 @@ def main() -> None:
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
         logger.error(
-            "Manca TELEGRAM_BOT_TOKEN. Copia .env.example in .env, oppure avvia la mappa web: python museum.py"
+            "Manca TELEGRAM_BOT_TOKEN. Copia .env.example in .env, oppure avvia il web: python museum.py"
         )
         sys.exit(1)
 

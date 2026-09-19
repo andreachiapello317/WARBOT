@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
-from services.live.feeds import clip, e, osm_url
+TELEGRAM_MAX_LEN = 3900
 
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
@@ -25,6 +25,21 @@ _CACHE: dict[str, tuple[float, Any]] = {}
 
 AcceptFn = Callable[[dict[str, Any]], bool]
 RankFn = Callable[[dict[str, Any]], tuple]
+
+
+def e(text: Any) -> str:
+    return html.escape(str(text), quote=False)
+
+
+def clip(text: str, limit: int = TELEGRAM_MAX_LEN) -> str:
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def osm_url(lat: float, lon: float, zoom: int = 7) -> str:
+    return f"https://www.openstreetmap.org/?mlat={lat:.4f}&mlon={lon:.4f}#map={zoom}/{lat:.4f}/{lon:.4f}"
 
 
 def _tag(tags: dict[str, Any], *keys: str) -> str:
