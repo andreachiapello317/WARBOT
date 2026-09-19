@@ -225,6 +225,7 @@ class FormatTest(unittest.TestCase):
         self.assertIn("limite", error_text({"code": "rate"}, place))
         self.assertIn("non è momentaneamente disponibile", error_text({"code": "unavailable"}, place))
         self.assertNotIn("Traceback", error_text({"code": "timeout"}, place))
+        self.assertIn("handshake TLS", error_text({"code": "timeout"}, place))
         self.assertIn("credenziali", error_text({"code": "auth", "http": 401}, place))
         self.assertIn("bloccato", error_text({"code": "auth", "http": 403}, place))
 
@@ -606,8 +607,17 @@ class TokenFetchTest(unittest.TestCase):
         self.assertEqual(bundle["code"], "timeout")
         self.assertEqual(bundle["http"], 0)
         text = error_text(bundle, {"name": "Milano"})
-        self.assertIn("non ha risposto", text)
+        self.assertIn("handshake TLS", text)
         self.assertNotIn("rifiutato", text)
+
+    def test_optional_proxy_opener(self) -> None:
+        from services.live.opensky_client import OpenSkyClient, reset_opensky_client
+
+        reset_opensky_client()
+        with patch.dict(os.environ, {"OPENSKY_PROXY": "http://127.0.0.1:8888"}, clear=False):
+            client = OpenSkyClient()
+        handlers = [type(h).__name__ for h in client._opener.handlers]
+        self.assertIn("ProxyHandler", handlers)
 
 
 class LiveOpenSkyTest(unittest.TestCase):

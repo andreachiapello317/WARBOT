@@ -75,3 +75,5 @@ Su Render imposta **obbligatorie** (valore nudo, senza virgolette; client OAuth2
 - `OPENSKY_CLIENT_SECRET`
 
 OAuth2 client credentials. **Non** usare `OPENSKY_USERNAME` / `OPENSKY_PASSWORD`. Niente file `credentials.json` nel repo. Senza `OPENSKY_CLIENT_ID` e `OPENSKY_CLIENT_SECRET` il mondo OpenSky resta visibile nel menu ma non chiama l'API: log `not_configured`, nessun accesso anonimo.
+
+Da Render OpenSky spesso **non completa l'handshake TLS** (TCP sì, HTTPS no): le credenziali sono irrilevanti in quel caso. Opzionale `OPENSKY_PROXY` se hai un proxy HTTPS fuori dal cloud.

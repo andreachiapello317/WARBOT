@@ -43,7 +43,7 @@ TOKEN_REFRESH_MARGIN = 30
 # Official OpenSkyApi._check_rate_limit(10, 5, get_states) — authenticated.
 AUTH_GET_STATES_MIN_S = 5.0
 MAX_429_WAIT = 5.0
-TIMEOUT_DEFAULT = 12
+TIMEOUT_DEFAULT = 8
 
 
 def _int_env(name: str, default: int, *, lo: int | None = None, hi: int | None = None) -> int:
@@ -110,6 +110,20 @@ def http_request(
         if "timed out" in reason.lower() or isinstance(exc.reason, TimeoutError):
             return 0, b"", {}
         return -1, b"", {}
+
+
+def _proxy_url() -> str:
+    return _clean_env(os.getenv("OPENSKY_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("https_proxy"))
+
+
+def _build_opener() -> urllib.request.OpenerDirector:
+    proxy = _proxy_url()
+    if proxy:
+        log.info("[OPENSKY] proxy=on")
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"https": proxy, "http": proxy})
+        )
+    return urllib.request.build_opener()
 
 
 def _clean_env(raw: str | None) -> str:
@@ -238,7 +252,7 @@ class OpenSkyClient:
     def __init__(self, token_manager: TokenManager | None = None) -> None:
         self._lock = threading.Lock()
         self._token_manager = token_manager
-        self._opener = urllib.request.build_opener()
+        self._opener = _build_opener()
         self._last_states_at = 0.0
 
     def credentials(self) -> tuple[str, str] | None:

@@ -570,7 +570,12 @@ def error_text(bundle: dict[str, Any], place: dict[str, Any] | None = None) -> s
                 "(client OAuth2, non username/password), senza virgolette."
             )
     elif code == "timeout":
-        body = "⚠️ OpenSky non ha risposto in tempo.\nRiprova tra poco."
+        body = (
+            "⚠️ OpenSky non completa la connessione da questo server.\n"
+            "Le credenziali ci sono. Da Render l'handshake TLS verso OpenSky resta appeso "
+            "(blocco IP cloud, non un errore di città o di secret).\n"
+            "Riprovare dallo stesso server non basta."
+        )
     else:
         body = "⚠️ OpenSky non è momentaneamente disponibile.\nRiprova tra poco."
     return clip(f"{title}\n\n{body}")
