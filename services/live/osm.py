@@ -26,7 +26,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "17"
+QUERY_VER = "18"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -583,10 +583,10 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "id": "mall",
         "emoji": "🏬",
         "title": "Centri commerciali",
-        "primary": (
+        "primary": ('way["shop"="mall"]["wikidata"]',),
+        "fallback": (
             'way["shop"="mall"]["name"~"Shopville|Centro Commerciale|Outlet|Gallerie|Gallery|Le Gru|Shopping",i]',
         ),
-        "fallback": ('way["shop"="mall"]["wikidata"]',),
         "accept": accept_mall,
         "score": score_mall,
         "out_limit": 12,
