@@ -18,9 +18,9 @@ from services.live import cache as osm_cache
 log = logging.getLogger("warbot.osm")
 
 TIMING = (os.getenv("OSM_TIMING") or "").strip().lower() in {"1", "true", "yes", "on"}
-FALLBACK_MIN = osm_cache.int_env("OSM_FALLBACK_MIN", 5, lo=1, hi=15)
-PAGE_SIZE = osm_cache.int_env("OSM_RESULT_LIMIT", 20, lo=10, hi=30)
-PAGE_CAP = osm_cache.int_env("OSM_PAGE_CAP", 40, lo=20, hi=80)
+FALLBACK_MIN = osm_cache.int_env("OSM_FALLBACK_MIN", 4, lo=1, hi=15)
+PAGE_SIZE = osm_cache.int_env("OSM_RESULT_LIMIT", 10, lo=5, hi=20)
+PAGE_CAP = osm_cache.int_env("OSM_PAGE_CAP", 10, lo=5, hi=20)
 
 
 def bbox_clause(bbox: tuple[float, float, float, float]) -> str:
@@ -39,10 +39,14 @@ def compile_query(
     if not clauses:
         raise ValueError("serve almeno una clausola Overpass")
     area = bbox_clause(bbox)
-    union = "\n  ".join(f"{clause}{area};" for clause in clauses)
+    if len(clauses) == 1:
+        body = f"{clauses[0]}{area};"
+    else:
+        union = "\n  ".join(f"{clause}{area};" for clause in clauses)
+        body = f"(\n  {union}\n);"
     return (
-        f"[out:json][timeout:{timeout}][maxsize:8388608];\n"
-        f"(\n  {union}\n);\n"
+        f"[out:json][timeout:{timeout}];\n"
+        f"{body}\n"
         f"out center {limit};"
     )
 

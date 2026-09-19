@@ -10,7 +10,7 @@ Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo
 2. 📍 Località e menu categorie, subito
 3. Tocca una categoria: il query engine (stile Wizard Overpass Turbo) genera QL selettiva
 4. Primary query → se troppi pochi candidati, **una** fallback più larga
-5. Deduplica + ranking di categoria → al massimo 20 in lista (➡️ altri se ce ne sono)
+5. Deduplica + ranking di categoria → **10** risultati
 6. Cache geocoding e categoria+luogo; timeout Overpass con Riprova, senza martellare
 
 Le **stazioni principali** chiedono `train=yes` / `uic_ref` / `building=train_station` e NOT subway/tram/platform/halt. Non scaricano `railway=station` nudo.

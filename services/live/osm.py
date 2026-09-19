@@ -20,13 +20,13 @@ TELEGRAM_MAX_LEN = 3900
 
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
-DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 18, lo=8, hi=30)
-QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 14, lo=6, hi=25)
+DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 16, lo=8, hi=25)
+QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 12, lo=6, hi=20)
 OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "8"
+QUERY_VER = "14"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -324,12 +324,24 @@ def score_port(_row: dict[str, Any], tags: dict[str, Any]) -> int:
     return extra
 
 
-def score_stad(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+def score_stad(row: dict[str, Any], tags: dict[str, Any]) -> int:
     extra = 0
+    sport = str(tags.get("sport") or "").lower()
+    name = _blob(row.get("name"), _tag(tags, "name", "alt_name", "old_name"))
+    if "soccer" in sport or "football" in sport:
+        extra += 8
     if _tag(tags, "capacity"):
-        extra += 3
+        extra += 4
     if _tag(tags, "wikidata"):
         extra += 3
+    if row.get("wikipedia") or _tag(tags, "wikipedia"):
+        extra += 3
+    if any(bit in sport for bit in ("ice_hockey", "curling", "tennis", "ice_skating")):
+        extra -= 6
+    if any(bit in name for bit in ("palaghiaccio", "palazzetto", "palasport", "pala ")):
+        extra -= 6
+    if any(bit in name for bit in ("juventus", "allianz", "olimpico")):
+        extra += 6
     return extra
 
 
@@ -416,70 +428,55 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "id": "aero",
         "emoji": "✈️",
         "title": "Aeroporti",
-        "primary": (
-            'nw["aeroway"="aerodrome"]["iata"]',
-            'nw["aeroway"="aerodrome"]["icao"]',
-        ),
+        "primary": ('nw["aeroway"="aerodrome"]["iata"]',),
         "fallback": ('nw["aeroway"="aerodrome"]["name"]',),
         "accept": accept_aerodrome,
         "score": score_aero,
-        "out_limit": 40,
-        "fallback_min": 3,
+        "out_limit": 12,
+        "fallback_min": 2,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
         "title": "Stazioni principali",
-        "primary": (
-            'nw["railway"="station"]["train"="yes"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]["station"!="monorail"]',
-            'nw["railway"="station"]["uic_ref"]["station"!="subway"]["station"!="light_rail"]',
-            'nw["building"="train_station"]["name"]',
-        ),
-        "fallback": (
-            'nw["railway"="station"]["name"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]',
-        ),
+        "primary": ('nw["railway"="station"]["train"="yes"]',),
+        "fallback": ('nw["building"="train_station"]["name"]',),
         "accept": accept_rail,
         "score": score_rail,
-        "out_limit": 80,
-        "fallback_min": 5,
+        "out_limit": 20,
+        "fallback_min": 4,
     },
     "hosp": {
         "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
-        "primary": (
-            'nw["amenity"="hospital"]["emergency"="yes"]["name"]',
-            'nw["amenity"="hospital"]["beds"]["name"]',
-        ),
+        "primary": ('nw["amenity"="hospital"]["emergency"="yes"]["name"]',),
         "fallback": ('nw["amenity"="hospital"]["name"]',),
         "accept": accept_named,
         "score": score_hosp,
-        "out_limit": 50,
-        "fallback_min": 5,
+        "out_limit": 15,
+        "fallback_min": 4,
     },
     "port": {
         "id": "port",
         "emoji": "⚓",
         "title": "Porti",
-        "primary": (
-            'nw["industrial"="port"]["name"]',
-            'nw["landuse"="harbour"]["name"]',
-        ),
-        "fallback": ('nw["harbour"="yes"]["name"]',),
+        "primary": ('nw["industrial"="port"]["name"]',),
+        "fallback": ('nw["landuse"="harbour"]["name"]',),
         "accept": accept_port,
         "score": score_port,
-        "out_limit": 40,
+        "out_limit": 12,
         "fallback_min": 2,
     },
     "stad": {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "primary": ('nw["leisure"="stadium"]["name"]',),
-        "fallback": ('nw["leisure"="stadium"]["name"]',),
+        "primary": ('rel["leisure"="stadium"]["name"]',),
+        "fallback": ('way["leisure"="stadium"]["name"]',),
         "accept": accept_stadium,
         "score": score_stad,
-        "out_limit": 40,
+        "out_limit": 15,
         "fallback_min": 3,
     },
     "mall": {
@@ -490,27 +487,19 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "fallback": ('nw["shop"="mall"]["name"]',),
         "accept": accept_mall,
         "score": score_mall,
-        "out_limit": 40,
+        "out_limit": 12,
         "fallback_min": 3,
     },
     "land": {
         "id": "land",
         "emoji": "🏛️",
         "title": "Luoghi principali",
-        "primary": (
-            'nw["tourism"="attraction"]["wikidata"]["name"]',
-            'nw["historic"="castle"]["name"]',
-            'nw["historic"="palace"]["name"]',
-            'nw["amenity"="townhall"]["name"]',
-            'nw["building"="cathedral"]["name"]',
-        ),
-        "fallback": (
-            'nw["historic"="monument"]["wikidata"]',
-            'nw["tourism"="museum"]["wikidata"]["name"]',
-        ),
+        "primary": ('nw["tourism"="attraction"]["wikidata"]["name"]',),
+        "fallback": ('nw["historic"="castle"]["name"]',),
         "accept": accept_named,
         "score": score_land,
-        "out_limit": 50,
+        "out_limit": 15,
+        "fallback_min": 4,
         "fallback_min": 5,
     },
 }
@@ -687,7 +676,12 @@ def normalize_element(el: dict[str, Any], *, category: str) -> dict[str, Any] | 
     accept: AcceptFn = meta.get("accept") or (lambda _t: True)
     if not accept(tags):
         return None
-    name = _tag(tags, "name:it", "name", "official_name", "alt_name") or "senza nome"
+    name = _tag(tags, "name:it", "name", "official_name") or "senza nome"
+    alt = _tag(tags, "alt_name", "old_name")
+    if alt and alt.lower() not in name.lower():
+        name = f"{name} · {alt}"
+    if category == "stad" and "allianz" in name.lower() and "juventus" not in name.lower():
+        name = f"{name} · Juventus Stadium"
     wiki = _tag(tags, "wikipedia")
     qid = _tag(tags, "wikidata")
     site = _tag(tags, "website", "contact:website", "url")

@@ -13,7 +13,7 @@ def help_text() -> str:
         "✈️ Aeroporti · 🚆 Stazioni principali · 🏥 Ospedali\n"
         "⚓ Porti · 🏟️ Stadi · 🏬 Centri commerciali · 🏛️ Luoghi principali · 🗺️ Mappa\n\n"
         "Le stazioni sono query selettive (train=yes / UIC / train_station, NOT subway/tram/platform).\n"
-        "Al massimo 20 per pagina, con ➡️ Altri risultati se ce ne sono di più.\n\n"
+        "Al massimo 10 per categoria, i più importanti. Overpass solo al tap.\n\n"
         "Ogni schermata ha ⬅️ Indietro e 🏠 Inizio.\n"
         "Un solo messaggio in chat: i bottoni lo aggiornano.\n\n"
         f"<i>{OSM_NOTE}</i>"
