@@ -8,12 +8,14 @@ Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo
 
 1. Scrivi Tokyo, Parigi, Milano… — solo geocoding, nessuna query Overpass
 2. 📍 Località e menu categorie, subito
-3. Tocca una categoria: il query engine (stile Wizard Overpass Turbo) genera QL selettiva
+3. Tocca una categoria: il query engine genera Overpass QL (filtri AND, tipo node/way/rel, `around` sul punto)
 4. Primary query → se troppi pochi candidati, **una** fallback più larga
-5. Deduplica + ranking di categoria → **10** risultati
+5. Deduplica (Wikidata / nome+posizione) + ranking di categoria → **10** risultati
 6. Cache geocoding e categoria+luogo; timeout Overpass con Riprova, senza martellare
 
-Le **stazioni principali** chiedono `train=yes` + Wikipedia (o edificio stazione) e scartano subway/tram/platform/halt e le code suburbane. Non scaricano `railway=station` nudo. Ogni categoria usa un riquadro stretto sul centro, ranking e tetto di **10** risultati.
+Overpass Turbo **non** è l'endpoint: è solo il modello mentale (Wizard AND/OR, corso «oltre il wizard»). Runtime: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Niente scorciatoie `{{bbox}}` / `{{geocodeArea}}`.
+
+Le **stazioni principali** chiedono `train=yes` + Wikidata, escludono subway/tram in query (`station!=`) e le code suburbane in ranking. `out center N qt` restituisce centroide e tag, senza recurse sui membri.
 
 ## Avvio locale
 
@@ -49,7 +51,7 @@ museum.py                 Web OSM WORLD (porta 47261)
 ui/keyboards.py           Tastiere
 ui/texts.py               Aiuto
 services/live/geocode.py  Photon (fail-fast) / Nominatim, cache
-services/live/engine.py   Compilatore query Overpass (stile Wizard)
+services/live/engine.py   Compilatore Overpass QL (AND/union/difference/around; non Turbo)
 services/live/osm.py      Categorie, ranking, fallback, cache
 services/live/cache.py    Cache memoria + file, TTL
 ```

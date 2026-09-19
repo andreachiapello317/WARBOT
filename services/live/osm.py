@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -12,7 +13,19 @@ import urllib.request
 from typing import Any, Callable
 
 from services.live import cache as osm_cache
-from services.live.engine import FALLBACK_MIN, PAGE_CAP, PAGE_SIZE, compile_query, timed
+from services.live.engine import (
+    FALLBACK_MIN,
+    PAGE_CAP,
+    PAGE_SIZE,
+    as_clauses,
+    clause,
+    compile_query,
+    eq,
+    exists,
+    neq,
+    regex,
+    timed,
+)
 
 log = logging.getLogger("warbot.osm")
 
@@ -26,7 +39,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "18"
+QUERY_VER = "19"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -256,15 +269,24 @@ def _prefer_name(left: str, right: str) -> str:
 
 
 def _cluster_key(item: dict[str, Any]) -> tuple:
+    qid = str(item.get("wikidata") or "").strip()
+    if qid:
+        return ("q", qid)
     name = _norm_place_name(item.get("name") or "")
     return ("g", name, round(float(item["lat"]), 2), round(float(item["lon"]), 2))
 
 
 def _merge_items(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     tags = {**(left.get("tags") or {}), **(right.get("tags") or {})}
-    out = dict(left)
+    type_rank = {"relation": 0, "way": 1, "node": 2}
+    prefer_right = type_rank.get(str(right.get("osm_type") or ""), 9) < type_rank.get(str(left.get("osm_type") or ""), 9)
+    out = dict(right if prefer_right else left)
     out["tags"] = tags
     out["name"] = _prefer_name(str(left.get("name") or ""), str(right.get("name") or ""))
+    if prefer_right:
+        for geo in ("id", "osm_type", "osm_id", "lat", "lon", "map"):
+            if right.get(geo) is not None:
+                out[geo] = right[geo]
     for key in (
         "uic",
         "iata",
@@ -278,8 +300,8 @@ def _merge_items(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         "building",
         "train",
     ):
-        if not out.get(key) and right.get(key):
-            out[key] = right[key]
+        if not out.get(key):
+            out[key] = left.get(key) or right.get(key)
     if not out.get("uic"):
         out["uic"] = _tag(tags, "uic_ref")
     if not out.get("train"):
@@ -508,104 +530,127 @@ def importance_score(row: dict[str, Any]) -> int:
     return score
 
 
-# Clausole Overpass in stile Wizard: unione di AND, NOT come tag sulla stessa query.
-# primary = selettiva; fallback = un po' più larga, solo se i candidati sono pochi.
-# span = raggio in gradi intorno al centro del luogo (urbano stretto, aero/port più larghi).
+# Query per categoria: AND = filtri concatenati; OR = union di Clause; NOT = != / regex.
+# Il tipo OSM è scelto a proposito (node stazione, way mall, rel/way stadio).
+# radius_m → filtro around sul punto geocodificato. fallback solo se i candidati sono pochi.
 CATEGORIES: dict[str, dict[str, Any]] = {
     "aero": {
         "id": "aero",
         "emoji": "✈️",
         "title": "Aeroporti",
-        "primary": ('nw["aeroway"="aerodrome"]["iata"]',),
+        "primary": (clause("nw", eq("aeroway", "aerodrome"), exists("iata")),),
         "fallback": (),
         "accept": accept_aerodrome,
         "score": score_aero,
         "out_limit": 8,
         "fallback_min": 1,
         "min_score": 5,
-        "span": 0.50,
+        "radius_m": 45000,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
         "title": "Stazioni principali",
-        "primary": ('node["railway"="station"]["train"="yes"]["wikidata"]',),
+        "primary": (
+            clause(
+                "node",
+                eq("railway", "station"),
+                eq("train", "yes"),
+                exists("wikidata"),
+                neq("station", "subway"),
+                neq("station", "tram"),
+                neq("station", "light_rail"),
+            ),
+        ),
         "fallback": (
-            'node["railway"="station"]["train"="yes"]["name"~"Centrale|Termini|Lingotto|Porta Nuova|Porta Susa|Porta Garibaldi|Cadorna|Lambrate|Rogoredo|Hauptbahnhof|Shinjuku|Shibuya",i]',
+            clause(
+                "node",
+                eq("railway", "station"),
+                eq("train", "yes"),
+                regex(
+                    "name",
+                    "Centrale|Termini|Lingotto|Porta Nuova|Porta Susa|Porta Garibaldi|Cadorna|Lambrate|Rogoredo|Hauptbahnhof|Shinjuku|Shibuya",
+                    ignore_case=True,
+                ),
+            ),
         ),
         "accept": accept_rail,
         "score": score_rail,
         "out_limit": 40,
         "fallback_min": 3,
         "min_score": 16,
-        "span": 0.10,
+        "radius_m": 11000,
     },
     "hosp": {
         "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
-        "primary": ('nw["amenity"="hospital"]["emergency"="yes"]["name"]',),
-        "fallback": ('nw["amenity"="hospital"]["emergency"="yes"]["wikidata"]',),
+        "primary": (clause("nw", eq("amenity", "hospital"), eq("emergency", "yes"), exists("name")),),
+        "fallback": (clause("nw", eq("amenity", "hospital"), eq("emergency", "yes"), exists("wikidata")),),
         "accept": accept_named,
         "score": score_hosp,
         "out_limit": 10,
         "fallback_min": 1,
         "min_score": 4,
-        "span": 0.12,
+        "radius_m": 13000,
     },
     "port": {
         "id": "port",
         "emoji": "⚓",
         "title": "Porti",
-        "primary": ('nw["industrial"="port"]["wikidata"]',),
-        "fallback": ('nw["landuse"="harbour"]["wikidata"]["name"]',),
+        "primary": (clause("nw", eq("industrial", "port"), exists("wikidata")),),
+        "fallback": (clause("nw", eq("landuse", "harbour"), exists("wikidata"), exists("name")),),
         "accept": accept_port,
         "score": score_port,
         "out_limit": 8,
         "fallback_min": 1,
         "min_score": 6,
-        "span": 0.38,
+        "radius_m": 40000,
     },
     "stad": {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "primary": ('rel["leisure"="stadium"]["wikidata"]',),
-        "fallback": ('way["leisure"="stadium"]["wikidata"]["sport"="soccer"]',),
+        "primary": (clause("rel", eq("leisure", "stadium"), exists("wikidata")),),
+        "fallback": (clause("way", eq("leisure", "stadium"), exists("wikidata"), eq("sport", "soccer")),),
         "accept": accept_stadium,
         "score": score_stad,
         "out_limit": 8,
         "fallback_min": 1,
         "min_score": 10,
-        "span": 0.14,
+        "radius_m": 15000,
     },
     "mall": {
         "id": "mall",
         "emoji": "🏬",
         "title": "Centri commerciali",
-        "primary": ('way["shop"="mall"]["wikidata"]',),
+        "primary": (clause("way", eq("shop", "mall"), exists("wikidata")),),
         "fallback": (
-            'way["shop"="mall"]["name"~"Shopville|Centro Commerciale|Outlet|Gallerie|Gallery|Le Gru|Shopping",i]',
+            clause(
+                "way",
+                eq("shop", "mall"),
+                regex("name", "Shopville|Centro Commerciale|Outlet|Gallerie|Gallery|Le Gru|Shopping", ignore_case=True),
+            ),
         ),
         "accept": accept_mall,
         "score": score_mall,
         "out_limit": 12,
         "fallback_min": 2,
         "min_score": 10,
-        "span": 0.17,
+        "radius_m": 18000,
     },
     "land": {
         "id": "land",
         "emoji": "🏛️",
         "title": "Luoghi principali",
-        "primary": ('nw["tourism"="attraction"]["wikipedia"]["name"]',),
-        "fallback": ('nw["historic"="castle"]["wikipedia"]["name"]',),
+        "primary": (clause("nw", eq("tourism", "attraction"), exists("wikipedia"), exists("name")),),
+        "fallback": (clause("nw", eq("historic", "castle"), exists("wikipedia"), exists("name")),),
         "accept": accept_named,
         "score": score_land,
         "out_limit": 12,
         "fallback_min": 1,
         "min_score": 5,
-        "span": 0.12,
+        "radius_m": 13000,
     },
 }
 
@@ -664,15 +709,26 @@ def parse_bbox(bbox: BBox | str | tuple[float, ...] | list[float]) -> BBox:
     return (south, west, north, east)
 
 
+def _meters_box(lat: float, lon: float, meters: int) -> BBox:
+    dlat = meters / 111320.0
+    coslat = max(0.2, math.cos(math.radians(lat)))
+    dlon = meters / (111320.0 * coslat)
+    return (lat - dlat, lon - dlon, lat + dlat, lon + dlon)
+
+
 def _scope_bbox(box: BBox, cat: str, center: tuple[float, float] | None = None) -> BBox:
-    """Riquadro stretto sul punto geocodificato, non sul comune intero."""
+    """Riquadro equivalente al raggio around, per cache e ranking."""
     if center is not None:
         clat, clon = float(center[0]), float(center[1])
     else:
         south, west, north, east = box
         clat = (south + north) / 2.0
         clon = (west + east) / 2.0
-    span = float((CATEGORIES.get(cat) or {}).get("span") or 0.14)
+    meta = CATEGORIES.get(cat) or {}
+    meters = int(meta.get("radius_m") or 0)
+    if meters > 0:
+        return _meters_box(clat, clon, meters)
+    span = float(meta.get("span") or 0.14)
     return (clat - span, clon - span, clat + span, clon + span)
 
 
@@ -850,16 +906,21 @@ def build_query(
     cat = resolve_category(category)
     if not cat:
         raise ValueError(f"categoria sconosciuta: {category}")
-    box = _scope_bbox(parse_bbox(bbox), cat, _as_center(center))
+    here = _as_center(center)
+    box = _scope_bbox(parse_bbox(bbox), cat, here)
     meta = CATEGORIES[cat]
-    clauses = tuple(meta["fallback"] if fallback else meta.get("primary") or meta.get("filters") or ())
+    raw = meta["fallback"] if fallback else meta.get("primary") or meta.get("filters") or ()
+    clauses = as_clauses(raw)
     if not clauses:
         raise ValueError(f"nessuna clausola Overpass per {cat}")
+    radius = int(meta.get("radius_m") or 0)
+    around = (here[0], here[1], radius) if here is not None and radius > 0 else None
     return compile_query(
-        box,
+        None if around else box,
         clauses,
         timeout=timeout if timeout is not None else QUERY_TIMEOUT,
         limit=limit if limit is not None else int(meta.get("out_limit") or OUT_LIMIT),
+        around=around,
     )
 
 
