@@ -174,6 +174,9 @@ def smithsonian_items(query: str, limit: int = 6) -> list[dict[str, Any]]:
         return rows
 
     return _cached(f"si:{query}:{limit}", TTL, load)
+
+
+def gallery_for(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen = set()
     for chunk in (
