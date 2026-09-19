@@ -102,7 +102,7 @@ def list_keyboard(rows: list[dict], *, prefix: str = "e:") -> InlineKeyboardMark
 
 def entity_keyboard(item: dict) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    section_btns = [kb_btn(title, f"s:{item['id']}:{i}") for i, (title, _body) in enumerate(item.get("sections") or ())[:4]]
+    section_btns = [kb_btn(title, f"s:{item['id']}:{i}") for i, (title, _body) in enumerate((item.get("sections") or ())[:4])]
     if section_btns:
         rows.extend(_pairs(section_btns))
     rel = related_items(item)
