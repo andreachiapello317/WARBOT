@@ -47,7 +47,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "29"
+QUERY_VER = "30"
 DEDUP_METERS = 180
 HOST_COOLDOWN = 180
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
@@ -656,8 +656,14 @@ def score_mall(row: dict[str, Any], tags: dict[str, Any]) -> int:
 def score_land(row: dict[str, Any], tags: dict[str, Any]) -> int:
     score = _named_bonus(row, tags)
     score += _wiki_bonus(row, tags)
-    if tags.get("tourism"):
+    if tags.get("tourism") == "museum":
+        score += 4
+    elif tags.get("tourism"):
         score += 3
+    if tags.get("amenity") == "theatre":
+        score += 3
+    if tags.get("place") == "square":
+        score += 2
     if tags.get("historic") in {"castle", "palace", "monument", "memorial"}:
         score += 4
     if _tag(tags, "heritage"):
@@ -666,6 +672,12 @@ def score_land(row: dict[str, Any], tags: dict[str, Any]) -> int:
         score += 3
     if tags.get("amenity") == "townhall":
         score += 2
+    clat, clon = row.get("_clat"), row.get("_clon")
+    if isinstance(clat, (int, float)) and isinstance(clon, (int, float)):
+        dist = ((float(row["lat"]) - float(clat)) ** 2 + (float(row["lon"]) - float(clon)) ** 2) ** 0.5
+        score += max(0, 8 - int(dist * 80))
+        if dist > 0.07:
+            score -= 12
     return score
 
 
@@ -807,18 +819,25 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "emoji": "🏛️",
         "title": "Luoghi importanti",
         "kind": "Luogo importante",
-        "primary": (clause("nw", eq("tourism", "attraction"), exists("wikipedia"), exists("name")),),
+        "primary": (
+            clause("nw", eq("tourism", "museum"), exists("name")),
+            clause("nw", eq("building", "cathedral"), exists("name")),
+            clause("nw", eq("amenity", "theatre"), exists("name")),
+            clause("nw", eq("tourism", "attraction"), exists("name")),
+            clause("way", eq("place", "square"), exists("name"), exists("wikidata")),
+            clause("nw", eq("historic", "castle"), exists("name")),
+        ),
         "fallback": (
-            clause("nw", eq("historic", "castle"), exists("wikipedia"), exists("name")),
-            clause("nw", eq("building", "cathedral"), exists("wikipedia"), exists("name")),
-            clause("nw", eq("amenity", "townhall"), exists("wikipedia"), exists("name")),
+            clause("nw", eq("historic", "monument"), exists("name"), exists("wikidata")),
+            clause("nw", eq("amenity", "townhall"), exists("name"), exists("wikidata")),
+            clause("nw", eq("building", "church"), exists("wikipedia"), exists("name")),
         ),
         "accept": accept_named,
         "score": score_land,
         "out_limit": 20,
         "fallback_min": 2,
-        "min_score": 6,
-        "radius_m": 13000,
+        "min_score": 5,
+        "radius_m": 8000,
         "near_m": 800,
     },
     "food": {

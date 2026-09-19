@@ -87,7 +87,7 @@ def _place(
 
 class PhotonGeocoder:
     def search(self, query: str, *, limit: int = 5) -> list[dict[str, Any]]:
-        url = PHOTON_URL + "?" + urllib.parse.urlencode({"q": query, "limit": str(limit), "lang": "it"})
+        url = PHOTON_URL + "?" + urllib.parse.urlencode({"q": query, "limit": str(limit)})
         payload = _get_json(url, timeout=PHOTON_TIMEOUT)
         hits: list[dict[str, Any]] = []
         for feat in payload.get("features") or []:
@@ -102,7 +102,8 @@ class PhotonGeocoder:
             extent = props.get("extent")
             bbox = None
             if isinstance(extent, list) and len(extent) == 4:
-                west, south, east, north = (float(v) for v in extent)
+                west, a, east, b = (float(v) for v in extent)
+                south, north = (a, b) if a <= b else (b, a)
                 bbox = (south, west, north, east)
             hits.append(
                 _place(
@@ -112,7 +113,11 @@ class PhotonGeocoder:
                     lon=lon,
                     bbox=bbox,
                     source="photon",
-                    extra={"osm_key": str(props.get("osm_key") or ""), "osm_value": str(props.get("osm_value") or "")},
+                    extra={
+                        "osm_key": str(props.get("osm_key") or ""),
+                        "osm_value": str(props.get("osm_value") or ""),
+                        "place_type": str(props.get("type") or ""),
+                    },
                 )
             )
         return hits
@@ -186,10 +191,53 @@ def _run_backend(name: str, query: str, limit: int) -> list[dict[str, Any]]:
     return PhotonGeocoder().search(query, limit=limit)
 
 
+_PLACE_RANK = {
+    "city": 0,
+    "town": 1,
+    "municipality": 2,
+    "village": 3,
+    "suburb": 4,
+    "administrative": 6,
+    "county": 7,
+    "state": 8,
+    "house": 9,
+    "district": 10,
+    "locality": 11,
+    "hamlet": 12,
+}
+_CITY_KINDS = {"city", "town", "municipality"}
+
+
+def place_kind(hit: dict[str, Any]) -> str:
+    for raw in (hit.get("osm_value"), hit.get("place_type"), hit.get("addresstype")):
+        kind = str(raw or "").lower().strip()
+        if kind in _PLACE_RANK:
+            return kind
+    return ""
+
+
 def _rank(hit: dict[str, Any]) -> tuple:
-    kind = str(hit.get("osm_value") or "").lower()
-    prefer = {"city": 0, "town": 1, "municipality": 2, "village": 3, "suburb": 4, "administrative": 5}
-    return (prefer.get(kind, 8), hit.get("name") or "")
+    kind = place_kind(hit)
+    return (_PLACE_RANK.get(kind, 8), hit.get("name") or "")
+
+
+def collapse_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Se esiste la città, scarta provincia/stazione/frazione con lo stesso nome."""
+    if len(hits) <= 1:
+        return hits
+    cities = [h for h in hits if place_kind(h) in _CITY_KINDS]
+    if not cities:
+        return hits
+    names = {" ".join(str(h.get("name") or "").lower().split()) for h in cities}
+    kept = list(cities)
+    for hit in hits:
+        if hit in cities:
+            continue
+        name = " ".join(str(hit.get("name") or "").lower().split())
+        if name in names:
+            continue
+        kept.append(hit)
+    return kept
 
 
 def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
@@ -201,7 +249,7 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
     t0 = time.time()
     cached = osm_cache.get(key)
     if isinstance(cached, dict) and "hits" in cached:
-        hits = list(cached.get("hits") or [])
+        hits = collapse_hits(sorted(list(cached.get("hits") or []), key=_rank))
         timed("geocoding", t0, n=len(hits), cached=1)
         if hits:
             return {"ok": True, "hits": hits, "query": q, "cached": True}
@@ -224,6 +272,7 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
         return {"ok": False, "error": error or "nessun luogo trovato", "hits": [], "query": q}
 
     rows.sort(key=_rank)
+    rows = collapse_hits(rows)
     osm_cache.put(key, {"hits": rows}, osm_cache.GEOCODE_TTL)
     timed("geocoding", t0, n=len(rows))
     return {"ok": True, "hits": rows, "query": q, "cached": False}

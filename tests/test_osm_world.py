@@ -80,7 +80,9 @@ class QueryBuilderTest(unittest.TestCase):
         self.assertIn('["shop"="mall"]', mall)
         self.assertNotIn("supermarket", mall)
         land = build_osm_query("land", BOX, 20, center=CENTER)
-        self.assertIn("wikipedia", land)
+        self.assertIn('["tourism"="museum"]', land)
+        self.assertIn('["building"="cathedral"]', land)
+        self.assertIn('["tourism"="attraction"]', land)
         self.assertNotIn('["building"="yes"]', land)
 
 
@@ -108,6 +110,40 @@ class AcceptFilterTest(unittest.TestCase):
         self.assertFalse(accept_hospital({"amenity": "pharmacy", "name": "Farmacia"}))
         self.assertTrue(accept_hospital({"amenity": "hospital", "name": "Niguarda", "emergency": "yes"}))
         self.assertFalse(accept_hospital({"amenity": "hospital", "name": "Pronto Soccorso San Paolo"}))
+
+
+class CuneoLandmarkTest(unittest.TestCase):
+    def test_cuneo_museum_and_duomo_pass_floor(self) -> None:
+        center = {"_clat": 44.3896, "_clon": 7.5479, "lat": 44.3896, "lon": 7.538, "category": "land"}
+        museum = {
+            **center,
+            "name": "Casa Galimberti",
+            "tags": {"tourism": "museum", "name": "Casa Galimberti", "wikidata": "Q55371173"},
+        }
+        duomo = {
+            **center,
+            "name": "Cattedrale di Santa Maria del Bosco",
+            "lat": 44.389,
+            "lon": 7.548,
+            "tags": {
+                "building": "cathedral",
+                "name": "Cattedrale di Santa Maria del Bosco",
+                "wikipedia": "it:Duomo di Cuneo",
+                "wikidata": "Q2942651",
+            },
+        }
+        far_hall = {
+            "name": "Municipio di Valdieri",
+            "category": "land",
+            "lat": 44.28,
+            "lon": 7.40,
+            "_clat": 44.3896,
+            "_clon": 7.5479,
+            "tags": {"amenity": "townhall", "name": "Municipio di Valdieri"},
+        }
+        self.assertGreaterEqual(importance_score(museum), 5)
+        self.assertGreaterEqual(importance_score(duomo), 5)
+        self.assertLess(importance_score(far_hall), 5)
 
 
 class RankingDedupTest(unittest.TestCase):
