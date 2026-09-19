@@ -214,7 +214,7 @@ def render_category(place: dict, cat: str) -> str:
     meta = CATEGORIES.get(cat)
     if not meta:
         return layout("Categoria", "<h1>Categoria assente</h1><p><a href='/'>Cerca</a></p>")
-    bundle = search(place["bbox"], cat)
+    bundle = search(place["bbox"], cat, center=(place["lat"], place["lon"]))
     qs = _place_qs(place)
     if not bundle.get("ok"):
         body = (

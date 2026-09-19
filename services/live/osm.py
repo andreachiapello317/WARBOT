@@ -26,7 +26,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "16"
+QUERY_VER = "17"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -332,13 +332,19 @@ def accept_mall(tags: dict[str, Any]) -> bool:
     return False
 
 
-def score_aero(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+def score_aero(row: dict[str, Any], tags: dict[str, Any]) -> int:
     extra = 0
     kind = str(tags.get("aerodrome") or tags.get("aerodrome:type") or "").lower()
     if "international" in kind:
-        extra += 3
+        extra += 8
     if _tag(tags, "wikidata"):
         extra += 2
+    clat, clon = row.get("_clat"), row.get("_clon")
+    if isinstance(clat, (int, float)) and isinstance(clon, (int, float)):
+        dist = ((float(row["lat"]) - float(clat)) ** 2 + (float(row["lon"]) - float(clon)) ** 2) ** 0.5
+        extra += max(0, 8 - int(dist * 30))
+        if dist > 0.28 and "international" not in kind:
+            extra -= 24
     return extra
 
 
@@ -517,20 +523,22 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "out_limit": 8,
         "fallback_min": 1,
         "min_score": 5,
-        "span": 0.55,
+        "span": 0.50,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
         "title": "Stazioni principali",
-        "primary": ('nw["railway"="station"]["train"="yes"]["wikipedia"]',),
-        "fallback": ('nw["railway"="station"]["building"="train_station"]["name"]',),
+        "primary": ('node["railway"="station"]["train"="yes"]["wikidata"]',),
+        "fallback": (
+            'node["railway"="station"]["train"="yes"]["name"~"Centrale|Termini|Lingotto|Porta Nuova|Porta Susa|Porta Garibaldi|Cadorna|Lambrate|Rogoredo|Hauptbahnhof|Shinjuku|Shibuya",i]',
+        ),
         "accept": accept_rail,
         "score": score_rail,
-        "out_limit": 12,
-        "fallback_min": 1,
+        "out_limit": 40,
+        "fallback_min": 3,
         "min_score": 16,
-        "span": 0.11,
+        "span": 0.10,
     },
     "hosp": {
         "id": "hosp",
@@ -569,20 +577,22 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "out_limit": 8,
         "fallback_min": 1,
         "min_score": 10,
-        "span": 0.13,
+        "span": 0.14,
     },
     "mall": {
         "id": "mall",
         "emoji": "🏬",
         "title": "Centri commerciali",
-        "primary": ('way["shop"="mall"]["wikidata"]',),
-        "fallback": ('rel["shop"="mall"]["wikidata"]',),
+        "primary": (
+            'way["shop"="mall"]["name"~"Shopville|Centro Commerciale|Outlet|Gallerie|Gallery|Le Gru|Shopping",i]',
+        ),
+        "fallback": ('way["shop"="mall"]["wikidata"]',),
         "accept": accept_mall,
         "score": score_mall,
-        "out_limit": 8,
-        "fallback_min": 1,
-        "min_score": 12,
-        "span": 0.15,
+        "out_limit": 12,
+        "fallback_min": 2,
+        "min_score": 10,
+        "span": 0.17,
     },
     "land": {
         "id": "land",
@@ -654,13 +664,22 @@ def parse_bbox(bbox: BBox | str | tuple[float, ...] | list[float]) -> BBox:
     return (south, west, north, east)
 
 
-def _scope_bbox(box: BBox, cat: str) -> BBox:
-    """Riquadro stretto sul centro: suburbio e comuni vicini restano fuori."""
-    south, west, north, east = box
-    clat = (south + north) / 2.0
-    clon = (west + east) / 2.0
+def _scope_bbox(box: BBox, cat: str, center: tuple[float, float] | None = None) -> BBox:
+    """Riquadro stretto sul punto geocodificato, non sul comune intero."""
+    if center is not None:
+        clat, clon = float(center[0]), float(center[1])
+    else:
+        south, west, north, east = box
+        clat = (south + north) / 2.0
+        clon = (west + east) / 2.0
     span = float((CATEGORIES.get(cat) or {}).get("span") or 0.14)
     return (clat - span, clon - span, clat + span, clon + span)
+
+
+def _as_center(center: tuple[float, float] | list[float] | None) -> tuple[float, float] | None:
+    if center is None or len(center) < 2:
+        return None
+    return (float(center[0]), float(center[1]))
 
 
 def _bbox_ql(bbox: BBox) -> str:
@@ -681,13 +700,13 @@ def _copy_bundle(bundle: dict[str, Any], *, cached: bool) -> dict[str, Any]:
     return out
 
 
-def peek(bbox: BBox | str, category: str) -> dict[str, Any] | None:
+def peek(bbox: BBox | str, category: str, *, center: tuple[float, float] | list[float] | None = None) -> dict[str, Any] | None:
     """Risultato categoria in cache, senza Overpass. None se assente o scaduto."""
     cat = resolve_category(category)
     if not cat:
         return None
     try:
-        box = _scope_bbox(parse_bbox(bbox), cat)
+        box = _scope_bbox(parse_bbox(bbox), cat, _as_center(center))
     except (TypeError, ValueError):
         return None
     hit = osm_cache.get(_cache_key(box, cat))
@@ -818,12 +837,20 @@ def normalize_element(el: dict[str, Any], *, category: str) -> dict[str, Any] | 
     }
 
 
-def build_query(bbox: BBox | str, category: str, *, fallback: bool = False, timeout: int | None = None, limit: int | None = None) -> str:
+def build_query(
+    bbox: BBox | str,
+    category: str,
+    *,
+    fallback: bool = False,
+    timeout: int | None = None,
+    limit: int | None = None,
+    center: tuple[float, float] | list[float] | None = None,
+) -> str:
     """Query Overpass QL per una categoria (primary o fallback). Non chiama la rete."""
     cat = resolve_category(category)
     if not cat:
         raise ValueError(f"categoria sconosciuta: {category}")
-    box = _scope_bbox(parse_bbox(bbox), cat)
+    box = _scope_bbox(parse_bbox(bbox), cat, _as_center(center))
     meta = CATEGORIES[cat]
     clauses = tuple(meta["fallback"] if fallback else meta.get("primary") or meta.get("filters") or ())
     if not clauses:
@@ -861,17 +888,50 @@ def _ingest(payload: dict[str, Any], *, category: str, box: BBox) -> list[dict[s
     return ranked
 
 
-def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def _trim_airports(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Caselle sì, Cuneo no: tieni il più vicino e gli internazionali."""
+    if len(rows) <= 1:
+        return rows
+
+    def dist(row: dict[str, Any]) -> float:
+        clat, clon = row.get("_clat"), row.get("_clon")
+        if not isinstance(clat, (int, float)) or not isinstance(clon, (int, float)):
+            return 0.0
+        return ((float(row["lat"]) - float(clat)) ** 2 + (float(row["lon"]) - float(clon)) ** 2) ** 0.5
+
+    ordered = sorted(rows, key=dist)
+    nearest = dist(ordered[0])
+    kept: list[dict[str, Any]] = []
+    for row in ordered:
+        d = dist(row)
+        tags = row.get("tags") or {}
+        kind = str(tags.get("aerodrome") or tags.get("aerodrome:type") or "").lower()
+        intl = "international" in kind
+        if d <= nearest + 0.03 or d <= 0.22 or intl:
+            kept.append(row)
+    kept.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+    return kept
+
+
+def search(
+    bbox: BBox | str,
+    category: str,
+    *,
+    timeout: int = DEFAULT_TIMEOUT,
+    center: tuple[float, float] | list[float] | None = None,
+) -> dict[str, Any]:
     """Una categoria: query Wizard-style, fallback solo se i candidati sono pochi."""
     cat = resolve_category(category)
     if not cat:
         return {"ok": False, "error": f"categoria sconosciuta: {category}", "rows": [], "total": 0}
     try:
-        box = _scope_bbox(parse_bbox(bbox), cat)
+        raw_box = parse_bbox(bbox)
+        here = _as_center(center)
+        box = _scope_bbox(raw_box, cat, here)
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc), "rows": [], "total": 0}
 
-    hit = peek(box, cat)
+    hit = peek(raw_box, cat, center=here)
     if hit is not None:
         return hit
 
@@ -879,7 +939,7 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
     pool_limit = int(meta.get("out_limit") or OUT_LIMIT)
     min_ok = int(meta.get("fallback_min") or FALLBACK_MIN)
     floor = int(meta.get("min_score") or 0)
-    query = build_query(box, cat, fallback=False, timeout=QUERY_TIMEOUT, limit=pool_limit)
+    query = build_query(raw_box, cat, fallback=False, timeout=QUERY_TIMEOUT, limit=pool_limit, center=here)
     used_fallback = False
     t0 = time.time()
     payload = overpass(query, timeout=timeout)
@@ -910,7 +970,7 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
     pool = len(ranked)
     fallback_clauses = tuple(meta.get("fallback") or ())
     if len(rows) < min_ok and fallback_clauses and fallback_clauses != tuple(meta.get("primary") or ()):
-        q2 = build_query(box, cat, fallback=True, timeout=QUERY_TIMEOUT, limit=pool_limit)
+        q2 = build_query(raw_box, cat, fallback=True, timeout=QUERY_TIMEOUT, limit=pool_limit, center=here)
         t2 = time.time()
         p2 = overpass(q2, timeout=timeout)
         timed("overpass", t2, cat=cat, fallback=1, ok=int(bool(p2.get("ok"))))
@@ -925,6 +985,8 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
             pool = len(ranked)
             query = q2
             used_fallback = True
+    if cat == "aero":
+        rows = _trim_airports(rows)
     rows = rows[:PAGE_CAP]
     for item in rows:
         item.pop("tags", None)

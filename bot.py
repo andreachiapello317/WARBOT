@@ -287,7 +287,8 @@ async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await show_osm_place(update, context)
         return
     _set_osm_wait(context, False)
-    bundle = osm_peek(place["bbox"], cat)
+    here = (place["lat"], place["lon"])
+    bundle = osm_peek(place["bbox"], cat, center=here)
     if bundle is None:
         await reply_html(
             update,
@@ -295,7 +296,7 @@ async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             f"🌍 <b>OSM WORLD</b>\n\nInterrogo Overpass · {place.get('display')}…",
             reply_markup=osm_place_keyboard(),
         )
-        bundle = await asyncio.to_thread(osm_search_bbox, place["bbox"], cat)
+        bundle = await asyncio.to_thread(osm_search_bbox, place["bbox"], cat, center=here)
     rows = list(bundle.get("rows") or [])
     context.user_data[OSM_ROWS_KEY] = rows
     context.user_data[OSM_CAT_KEY] = cat
