@@ -27,10 +27,10 @@ CENTER = (45.464, 9.19)
 
 class QueryBuilderTest(unittest.TestCase):
     def test_endpoint_overpass_primary(self) -> None:
-        self.assertEqual(OVERPASS_URL, "https://overpass-api.de/api/interpreter")
+        self.assertEqual(OVERPASS_URL, "https://maps.mail.ru/osm/tools/overpass/api/interpreter")
         self.assertEqual(OVERPASS_FALLBACK_URLS[0], OVERPASS_URL)
-        self.assertIn("lz4.overpass-api.de", OVERPASS_FALLBACK_URLS[1])
-        self.assertIn("maps.mail.ru", OVERPASS_FALLBACK_URLS[2])
+        self.assertIn("overpass-api.de", OVERPASS_FALLBACK_URLS[1])
+        self.assertIn("lz4.overpass-api.de", OVERPASS_FALLBACK_URLS[2])
         self.assertNotIn("overpass.osm.ch", OVERPASS_URL)
         self.assertTrue(all("overpass.osm.ch" not in u for u in OVERPASS_FALLBACK_URLS))
 

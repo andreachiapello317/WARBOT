@@ -65,7 +65,7 @@ museum.py                   Web OSM WORLD (invariato)
 
 Callback: `city:ask`, `world:list`, `world:osm`, `world:opensky`, `osm:rail`, `osm:rail:page:2`, `opensky:aircraft`, `opensky:aircraft:page:1`.
 
-Overpass primary: `https://overpass-api.de/api/interpreter`. Failover: lz4.overpass-api.de, maps.mail.ru. Una replica con timestamp OSM invalido (es. overpass.osm.ch vuoto) non conta come «zero risultati». GET `/` e `/health` sul webhook rispondono 200 (Render non deve vedere 404).
+Overpass primary: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Failover: overpass-api.de, lz4.overpass-api.de. Una replica con timestamp OSM invalido (es. overpass.osm.ch vuoto) non conta come «zero risultati». GET `/` e `/health` sul webhook rispondono 200 (Render non deve vedere 404).
 
 OpenSky: [REST](https://openskynetwork.github.io/opensky-api/rest.html) e [Python API 1.4.0](https://openskynetwork.github.io/opensky-api/python.html) — `GET /api/states/all` con bbox (`lamin`/`lamax`/`lomin`/`lomax`) e `extended=1`. Token OAuth2 riusato (TokenManager), sessione HTTP persistente, minimo 5s tra `get_states` autenticati. Niente accesso anonimo.
 

@@ -33,23 +33,23 @@ log = logging.getLogger("warbot.osm")
 
 TELEGRAM_MAX_LEN = 3900
 
-# osm.ch risponde 200 con elements=[] e timestamp_osm_base="117135" (replica vuota).
-# Non usarlo: maschera i dati veri e avvelena il failover.
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# maps.mail.ru è l'interpreter che risponde da Render. overpass-api.de da lì spesso non parte.
+# osm.ch è una replica vuota (timestamp_osm_base="117135"): non usarlo.
+OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 OVERPASS_FALLBACK_URLS = (
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass-api.de/api/interpreter",
     "https://lz4.overpass-api.de/api/interpreter",
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 )
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
-DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 14, lo=8, hi=25)
-QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 16, lo=8, hi=25)
-FIRST_HOST_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_FIRST_TIMEOUT", 12, lo=8, hi=20)
+DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 18, lo=8, hi=25)
+QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 20, lo=8, hi=25)
+FIRST_HOST_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_FIRST_TIMEOUT", 18, lo=8, hi=22)
 OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "33"
+QUERY_VER = "34"
 DEDUP_METERS = 180
 HOST_COOLDOWN = 45
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
