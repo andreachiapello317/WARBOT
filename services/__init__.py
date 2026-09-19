@@ -1,1 +1,1 @@
-"""Cataloghi enciclopedici di WARBOT: storia militare, non istruzioni operative."""
+"""Feed live di WARBOT: ADS-B, AIS, ISS."""

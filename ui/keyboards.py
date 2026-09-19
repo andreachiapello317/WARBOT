@@ -1,14 +1,10 @@
-"""Tastiere inline: home a sei mondi e schede."""
+"""Tastiere inline del live: hub, zone, navi, ISS."""
 
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from services.catalog import related_items
-from services.history.eras import all_eras
-from services.history.pack import FACETS
 from services.live import REGIONS
-from services.models import WORLDS
 
 
 def kb_btn(label: str, data: str) -> InlineKeyboardButton:
@@ -32,130 +28,6 @@ def _pairs(items: list[InlineKeyboardButton]) -> list[list[InlineKeyboardButton]
     return rows
 
 
-def home_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [kb_btn("📡 Posizioni live · aerei, navi, ISS", "home:live")],
-            [kb_btn("⚔️ Epoche", "world:epoche"), kb_btn("🗺️ Campi", "world:campi")],
-            [kb_btn("🪖 Truppe", "world:truppe"), kb_btn("🏳️ Bandiere", "world:bandiere")],
-            [kb_btn("⚙️ Ferro", "world:ferro"), kb_btn("🕊️ Patti", "world:patti")],
-            [kb_btn("📖 Oggi", "home:oggi"), kb_btn("🎲 Casuale", "home:random")],
-            [kb_btn("🔍 Cerca", "home:cerca"), kb_btn("🎲 Quiz", "home:quiz")],
-            [kb_btn("🧭 Esplora", "home:esplora")],
-        ]
-    )
-
-
-def esplora_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [kb_btn("⚔️ Epoche", "world:epoche"), kb_btn("🗺️ Campi", "world:campi")],
-            [kb_btn("🪖 Truppe", "world:truppe"), kb_btn("🏳️ Bandiere", "world:bandiere")],
-            [kb_btn("⚙️ Ferro", "world:ferro"), kb_btn("🕊️ Patti", "world:patti")],
-            [kb_btn("📡 Posizioni live", "home:live")],
-            nav_row(),
-        ]
-    )
-
-
-def world_keyboard(key: str) -> InlineKeyboardMarkup:
-    if key == "epoche":
-        return era_index_keyboard()
-    extra = {
-        "campi": [
-            [kb_btn("🏛️ Antiche", "l:bat:ant"), kb_btn("🏰 Medievali", "l:bat:med")],
-            [kb_btn("⚔️ Moderne", "l:bat:mod"), kb_btn("🌍 Contemporanee", "l:bat:con")],
-            [kb_btn("🗺️ Tutte le battaglie", "l:bat:all")],
-        ],
-        "truppe": [
-            [kb_btn("🪖 Ruoli", "l:role:all"), kb_btn("🎖️ Gradi", "l:rank:all")],
-            [kb_btn("🪜 Scala dei gradi", "l:rank:scale")],
-        ],
-        "bandiere": [
-            [kb_btn("🇮🇹 Italia", "e:italia"), kb_btn("🇫🇷 Francia", "e:francia")],
-            [kb_btn("🇬🇧 Regno Unito", "e:uk"), kb_btn("🇺🇸 Stati Uniti", "e:usa")],
-            [kb_btn("🐺 Roma", "e:roma"), kb_btn("🟦 NATO", "e:nato")],
-            [kb_btn("🏳️ Tutte le schede", "l:army:all")],
-        ],
-        "ferro": [
-            [kb_btn("🛡️ Equipaggiamento", "l:gear:all"), kb_btn("🚁 Mezzi", "l:vehicle:all")],
-            [kb_btn("🏰 Fortificazioni", "l:fort:all")],
-            [kb_btn("🚙 Terra", "e:t34"), kb_btn("✈️ Aria", "e:spitfire")],
-            [kb_btn("⚓ Mare", "e:portaerei"), kb_btn("🚀 Spazio", "e:satcom")],
-            [kb_btn("📡 Posizioni live", "home:live")],
-        ],
-        "patti": [
-            [kb_btn("📜 Documenti", "l:doc:all"), kb_btn("🕊️ Pace", "l:peace:all")],
-            [kb_btn("👤 Personaggi", "l:person:all"), kb_btn("🧠 Strategia", "l:idea:all")],
-        ],
-    }[key]
-    rows = extra + [[kb_btn("🎲 Casuale qui", f"rnd:{key}")], nav_row()]
-    return InlineKeyboardMarkup(rows)
-
-
-def list_keyboard(rows: list[dict], *, prefix: str = "e:") -> InlineKeyboardMarkup:
-    buttons = [kb_btn(f"{item['emoji']} {item['title']}", f"{prefix}{item['id']}") for item in rows[:40]]
-    grid = _pairs(buttons)
-    grid.append(nav_row())
-    return InlineKeyboardMarkup(grid)
-
-
-def entity_keyboard(item: dict) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    sections = tuple(item.get("sections") or ())[:4]
-    section_btns = [
-        kb_btn(title, f"s:{item['id']}:{i}")
-        for i, (title, _body) in enumerate(sections)
-    ]
-    if section_btns:
-        rows.extend(_pairs(section_btns))
-    rel = related_items(item)
-    if rel:
-        rel_btns = [kb_btn(f"{r['emoji']} {r['title']}", f"e:{r['id']}") for r in rel[:6]]
-        rows.extend(_pairs(rel_btns))
-    world = item.get("world") or "epoche"
-    meta = WORLDS[world]
-    rows.append([kb_btn(f"{meta['emoji']} {meta['title']}", f"world:{world}"), kb_btn("🎲 Un'altra", "home:random")])
-    rows.append(nav_row())
-    return InlineKeyboardMarkup(rows)
-
-
-def rank_scale_keyboard() -> InlineKeyboardMarkup:
-    order = ("soldato", "caporale", "sergente", "tenente", "capitano", "maggiore", "colonnello", "generale")
-    labels = ("🪖 Soldato", "🎖️ Caporale", "⭐ Sergente", "🎖️ Tenente", "⭐ Capitano", "⭐⭐ Maggiore", "⭐⭐⭐ Colonnello", "⭐⭐⭐⭐ Generale")
-    buttons = [kb_btn(label, f"e:{eid}") for label, eid in zip(labels, order)]
-    grid = _pairs(buttons)
-    grid.append(nav_row())
-    return InlineKeyboardMarkup(grid)
-
-
-def quiz_hub_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [kb_btn("🧠 Guerra", "q:war"), kb_btn("🗺️ Battaglia", "q:bat")],
-            [kb_btn("🎖️ Grado", "q:rank"), kb_btn("🚁 Mezzo", "q:veh")],
-            [kb_btn("🏳️ Nazione", "q:nat"), kb_btn("👤 Personaggio", "q:per")],
-            [kb_btn("📜 Trattato", "q:trt"), kb_btn("📅 Anno", "q:year")],
-            [kb_btn("⚔️ Vero o falso", "q:tf"), kb_btn("🎯 10 domande", "q:10")],
-            nav_row(),
-        ]
-    )
-
-
-def quiz_options_keyboard(n: int) -> InlineKeyboardMarkup:
-    labels = ("A", "B", "C", "D")
-    buttons = [kb_btn(labels[i], f"qa:{i}") for i in range(min(n, 4))]
-    return InlineKeyboardMarkup([buttons, nav_row()])
-
-
-def after_quiz_keyboard(eid: str | None) -> InlineKeyboardMarkup:
-    rows = [[kb_btn("➡️ Prossima", "q:again"), kb_btn("🎲 Quiz", "home:quiz")]]
-    if eid:
-        rows.insert(0, [kb_btn("📖 Scheda", f"e:{eid}")])
-    rows.append(nav_row())
-    return InlineKeyboardMarkup(rows)
-
-
 def back_home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([nav_row()])
 
@@ -166,8 +38,7 @@ def live_hub_keyboard() -> InlineKeyboardMarkup:
             [kb_btn("🔄 Aggiorna posizioni", "home:live")],
             [kb_btn("✈️ Aerei Italia", "live:ac:it"), kb_btn("🌊 Mediterraneo", "live:ac:med")],
             [kb_btn("🚁 Elicotteri", "live:heli:it"), kb_btn("⚓ Navi Baltico", "live:ships")],
-            [kb_btn("🛰️ Mappa ISS", "live:iss")],
-            nav_row(),
+            [kb_btn("🛰️ Mappa ISS", "live:iss"), kb_btn("❓ Aiuto", "home:aiuto")],
         ]
     )
 
@@ -206,76 +77,3 @@ def live_misc_keyboard(token: str) -> InlineKeyboardMarkup:
             nav_row(),
         ]
     )
-
-
-def era_index_keyboard() -> InlineKeyboardMarkup:
-    buttons = [kb_btn(f"{era['emoji']} {era['title']}", f"era:{era['id']}") for era in all_eras()]
-    grid = _pairs(buttons)
-    grid.append([kb_btn("🎲 Viaggia nel tempo", "h:go")])
-    grid.append([kb_btn("📚 Cassetto del museo", "l:war:all")])
-    grid.append(nav_row())
-    return InlineKeyboardMarkup(grid)
-
-
-def era_hub_keyboard(eid: str) -> InlineKeyboardMarkup:
-    buttons = [kb_btn(f"{emoji} {title}", f"era:{eid}:{key}") for key, emoji, title in FACETS]
-    grid = _pairs(buttons)
-    grid.insert(0, [kb_btn("🌍 Panoramica", f"era:{eid}:ov")])
-    grid.append([kb_btn("🎲 Viaggia qui", f"era:{eid}:go"), kb_btn("📚 Cassetto", "l:war:all")])
-    grid.append([kb_btn("🌍 Tutte le epoche", "world:epoche")])
-    grid.append(nav_row())
-    return InlineKeyboardMarkup(grid)
-
-
-def hc_list_keyboard(rows: list[dict], eid: str) -> InlineKeyboardMarkup:
-    buttons = []
-    for row in rows[:20]:
-        if not row.get("id"):
-            continue
-        if not (row.get("db") == "warbot" or row.get("summary")):
-            continue
-        title = str(row.get("title") or row["id"])[:40]
-        emoji = row.get("emoji") or "📖"
-        buttons.append(kb_btn(f"{emoji} {title}", f"hc:{row['id']}"))
-    grid = _pairs(buttons)
-    grid.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("⏳ Cronologia", f"era:{eid}:tl")])
-    grid.append(nav_row())
-    return InlineKeyboardMarkup(grid)
-
-
-def hc_card_keyboard(item: dict, related: list[dict], eid: str | None = None) -> InlineKeyboardMarkup:
-    rel_btns = [
-        kb_btn(f"{r.get('emoji', '📖')} {str(r.get('title') or r.get('id'))[:36]}", f"hc:{r['id']}")
-        for r in related[:6]
-        if r.get("id")
-    ]
-    rows = _pairs(rel_btns)
-    qid = item.get("qid") or ""
-    if qid:
-        rows.append([kb_btn("🔗 Grafo Wikidata", f"wd:{qid}")])
-    if eid:
-        rows.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("🎲 Un altro viaggio", "h:go")])
-    else:
-        rows.append([kb_btn("🌍 Epoche", "world:epoche"), kb_btn("🎲 Viaggia nel tempo", "h:go")])
-    rows.append(nav_row())
-    return InlineKeyboardMarkup(rows)
-
-
-def wd_card_keyboard(item: dict, related: list[dict], eid: str | None = None) -> InlineKeyboardMarkup:
-    if eid:
-        rows = [[kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("🎲 Viaggia", "h:go")]]
-    else:
-        rows = [[kb_btn("🌍 Epoche", "world:epoche"), kb_btn("🎲 Viaggia nel tempo", "h:go")]]
-    rows.append(nav_row())
-    return InlineKeyboardMarkup(rows)
-
-
-def mixed_search_keyboard(catalog_rows: list[dict], history_rows: list[dict]) -> InlineKeyboardMarkup:
-    buttons = [kb_btn(f"{item['emoji']} {item['title']}", f"e:{item['id']}") for item in catalog_rows[:12]]
-    buttons += [
-        kb_btn(f"{row.get('emoji', '📖')} {row['title']}", f"hc:{row['id']}")
-        for row in history_rows[:12]
-    ]
-    grid = _pairs(buttons[:24])
-    grid.append(nav_row())
-    return InlineKeyboardMarkup(grid)

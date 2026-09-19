@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import html
 import json
 import time
 import urllib.error
@@ -10,14 +11,26 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from services.catalog import clip, e
-
-USER_AGENT = "WARBOT/1.0 (educational museum; public ADS-B/AIS)"
+TELEGRAM_MAX_LEN = 3900
 LIVE_NOTE = (
     "Dati che aerei e navi trasmettono apertamente (ADS-B / AIS). "
     "Copertura da radioamatori e porti, non un radar militare. "
     "Non è un quadro operativo e non serve a inseguire bersagli."
 )
+
+
+def e(text: Any) -> str:
+    return html.escape(str(text), quote=False)
+
+
+def clip(text: str, limit: int = TELEGRAM_MAX_LEN) -> str:
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+USER_AGENT = "WARBOT/1.0 (live positions; public ADS-B/AIS)"
 
 REGIONS: dict[str, dict[str, Any]] = {
     "it": {"emoji": "🇮🇹", "title": "Italia", "lat": 42.5, "lon": 12.5, "dist": 250},
