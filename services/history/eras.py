@@ -15,7 +15,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q11756",
         "wiki": "Preistoria",
         "media": "prehistoric archaeology cave painting",
-        "people": ("Q1422", "Q102818"),  # Ötzi, Lucy se presenti
+        "people": ("Q171291",),
     },
     "ant": {
         "emoji": "🏛️",
@@ -26,7 +26,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q41493",
         "wiki": "Storia_antica",
         "media": "ancient egypt mesopotamia antiquity",
-        "people": ("Q37140", "Q3801", "Q129255"),  # Hammurabi, Ramses, Gilgamesh
+        "people": ("Q36359", "Q1523", "Q159709", "Q635"),
         "wars": ("Q83159", "Q202161", "Q2029"),  # greco-persiane, peloponneso, troia
     },
     "gre": {
@@ -38,7 +38,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q11772",
         "wiki": "Antica_Grecia",
         "media": "ancient greece hoplite parthenon",
-        "people": ("Q8409", "Q868", "Q12872", "Q131671"),  # Alessandro, Platone, Pericle, Erodoto
+        "people": ("Q8409", "Q859", "Q868", "Q80398", "Q26825"),
         "wars": ("Q83159", "Q202161", "Q2029"),
     },
     "rom": {
@@ -50,7 +50,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q1747689",
         "wiki": "Antica_Roma",
         "media": "ancient rome legionary forum",
-        "people": ("Q1048", "Q40787", "Q1398", "Q1418"),  # Cesare, Augusto, Annibale, Scipione
+        "people": ("Q1048", "Q1405", "Q36456", "Q2253"),
         "wars": ("Q202161", "Q2029", "Q12554"),
     },
     "tarda": {
@@ -62,7 +62,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q217050",
         "wiki": "Tarda_antichità",
         "media": "late antiquity byzantine constantinople",
-        "people": ("Q8413", "Q41670", "Q184437"),  # Costantino, Giustiniano, Agostino
+        "people": ("Q8413", "Q41866", "Q8018"),
     },
     "med": {
         "emoji": "🏰",
@@ -73,7 +73,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q12554",
         "wiki": "Medioevo",
         "media": "medieval castle knight crusades manuscript",
-        "people": ("Q43959", "Q191054", "Q133600", "Q180020"),  # Carlo Magno, Saladino, Gengis Khan, Giovanna
+        "people": ("Q3044", "Q8581", "Q720", "Q7226"),
         "wars": ("Q12201", "Q51600", "Q12570"),  # crociate, cento anni, guerra delle rose
     },
     "rin": {
@@ -85,7 +85,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q4692",
         "wiki": "Rinascimento",
         "media": "renaissance italy leonardo armor",
-        "people": ("Q762", "Q5681", "Q1399", "Q191681"),  # Leonardo, Machiavelli, Michelangelo, Carlo V
+        "people": ("Q762", "Q1399", "Q5592", "Q32500"),
         "wars": ("Q51604", "Q12577"),  # guerre d'Italia, ottanta anni
     },
     "mod": {
@@ -97,7 +97,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q5308718",
         "wiki": "Età_moderna",
         "media": "early modern europe thirty years war sail",
-        "people": ("Q129247", "Q1511", "Q4604"),  # Richelieu, Luigi XIV, Newton
+        "people": ("Q26702", "Q7742"),
         "wars": ("Q2487", "Q12577", "Q182890"),  # trent'anni, ottanta anni, successione spagnola
     },
     "riv": {
@@ -109,7 +109,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q6534",
         "wiki": "Rivoluzione_francese",
         "media": "french revolution napoleon 1789",
-        "people": ("Q22686", "Q517", "Q1511", "Q1511"),
+        "people": ("Q517", "Q44197", "Q23"),
         "wars": ("Q17921", "Q78994", "Q6534"),
     },
     "ind": {
@@ -121,7 +121,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q2269",
         "wiki": "Rivoluzione_industriale",
         "media": "industrial revolution factory steam locomotive",
-        "people": ("Q1519", "Q9095", "Q355"),  # Watt, Marx, Stephenson se Q ok
+        "people": ("Q9041", "Q9061"),
     },
     "xix": {
         "emoji": "👑",
@@ -132,7 +132,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q6955",
         "wiki": "XIX_secolo",
         "media": "nineteenth century victorian american civil war",
-        "people": ("Q517", "Q22686", "Q1313", "Q91"),  # Napoleone, Lincoln, Garibaldi, Bismarck
+        "people": ("Q517", "Q91", "Q539", "Q8442"),
         "wars": ("Q78994", "Q8676", "Q1983"),  # napoleoniche, secessione, franco-prussiana
     },
     "ww1": {
@@ -144,7 +144,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q361",
         "wiki": "Prima_guerra_mondiale",
         "media": "world war I trench uniform 1916",
-        "people": ("Q7737", "Q40767", "Q159631", "Q1511"),  # Giolitti?, Joffre, Haig - will skip missing
+        "people": ("Q43063", "Q34296"),
         "wars": ("Q361",),
     },
     "int": {
@@ -156,7 +156,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q154611",
         "wiki": "Periodo_interbellico",
         "media": "interwar 1920s 1930s depression fascism",
-        "people": ("Q352", "Q8016", "Q22686"),
+        "people": ("Q352", "Q8016", "Q23559"),
         "wars": ("Q10829", "Q215609"),  # Spagna, Etiopia
     },
     "ww2": {
@@ -168,7 +168,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q362",
         "wiki": "Seconda_guerra_mondiale",
         "media": "world war II 1944 photograph",
-        "people": ("Q352", "Q8016", "Q855", "Q40025", "Q9916", "Q2188"),
+        "people": ("Q352", "Q8016", "Q855", "Q23559", "Q8007", "Q9916", "Q2042"),
         "wars": ("Q362", "Q189266", "Q154720"),  # WWII, Pacific, Eastern Front
     },
     "cold": {
@@ -180,7 +180,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q8683",
         "wiki": "Guerra_fredda",
         "media": "cold war berlin wall sputnik 1962",
-        "people": ("Q855", "Q8007", "Q44306", "Q1124"),  # Stalin, Kennedy, Gorbaciov, Che?
+        "people": ("Q855", "Q9696", "Q30487"),
         "wars": ("Q8663", "Q8740", "Q37643"),  # Corea, Vietnam, Afghanistan 1979
     },
     "con": {
@@ -192,7 +192,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q6495391",
         "wiki": "Età_contemporanea",
         "media": "united nations contemporary history 1990",
-        "people": ("Q44306", "Q1124", "Q8023"),
+        "people": ("Q30487", "Q9696"),
     },
     "spa": {
         "emoji": "🚀",
@@ -203,7 +203,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q938328",
         "wiki": "Era_spaziale",
         "media": "space race apollo sputnik nasa",
-        "people": ("Q43316", "Q1615", "Q44078"),  # Gagarin, von Braun, Armstrong
+        "people": ("Q7327", "Q1615", "Q57384"),
     },
     "dig": {
         "emoji": "💻",
@@ -214,7 +214,7 @@ ERAS: dict[str, dict[str, Any]] = {
         "qid": "Q956129",
         "wiki": "Società_dell'informazione",
         "media": "personal computer internet 1990s digital",
-        "people": ("Q5284", "Q80", "Q92"),  # Turing, Berners-Lee, Gates
+        "people": ("Q7251", "Q80", "Q5284"),
     },
 }
 

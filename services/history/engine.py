@@ -43,6 +43,29 @@ def _is_human(row: dict[str, Any]) -> bool:
     return bool(row.get("human") or "Q5" in (row.get("types") or ()))
 
 
+def _person_ok(row: dict[str, Any], era: dict[str, Any] | None = None) -> bool:
+    label = (row.get("label") or "").strip()
+    if len(label) < 3 or label.isdigit() or label.startswith("Q") and label[1:].isdigit():
+        return False
+    if not any(ch.isalpha() for ch in label):
+        return False
+    if era and row.get("id") in set(era.get("people") or ()):
+        return True
+    if not _is_human(row):
+        return False
+    if not era:
+        return True
+    birth, death = row.get("start"), row.get("end")
+    if birth is None and death is None:
+        return False
+    lo, hi = era["start"], era["end"]
+    if birth is not None and birth > hi + 10:
+        return False
+    if death is not None and death < lo - 10:
+        return False
+    return True
+
+
 def _is_conflict(row: dict[str, Any]) -> bool:
     types = set(row.get("types") or ())
     return bool(types & {"Q198", "Q178561", "Q350604", "Q103495", "Q124734", "Q180684"}) or (
@@ -87,10 +110,11 @@ def list_for(era_id: str, kind: str) -> dict[str, Any]:
     hub = bundle.get(era["qid"])
     rows = [row for qid, row in bundle.items() if qid != era["qid"]]
     if kind == "ppl":
-        picked = [r for r in rows if _is_human(r)]
-        if len(picked) < 4:
-            extras = get_entities(list(era.get("people") or ()))
-            picked.extend(r for r in extras.values() if r["id"] not in {x["id"] for x in picked})
+        picked = [r for r in rows if _person_ok(r, era)]
+        extras = get_entities(list(era.get("people") or ()))
+        picked.extend(
+            r for r in extras.values() if r["id"] not in {x["id"] for x in picked} and _person_ok(r, era)
+        )
         rows = picked
     elif kind == "war":
         rows = [r for r in rows if _is_conflict(r) and not (r.get("label") or "").lower().startswith("battaglia")]
@@ -157,7 +181,18 @@ def entity_card(qid: str) -> dict[str, Any] | None:
         return None
     wiki = wiki_summary(row.get("wiki") or row["label"])
     related_ids = (row.get("parts") or [])[:8] + (row.get("participants") or [])[:8] + (row.get("places") or [])[:6]
-    related = [r for r in get_entities(related_ids).values() if r["id"] != qid][:12]
+    related = []
+    for extra in get_entities(related_ids).values():
+        if extra["id"] == qid:
+            continue
+        label = (extra.get("label") or "").strip()
+        if len(label) < 3 or label.isdigit() or not any(ch.isalpha() for ch in label):
+            continue
+        if extra.get("human") and not _person_ok(extra):
+            continue
+        related.append(extra)
+        if len(related) >= 12:
+            break
     return {"ok": True, "item": row, "wiki": wiki, "related": related}
 
 
@@ -174,7 +209,10 @@ def travel(era_id: str | None = None) -> dict[str, Any]:
         events = [hub] if hub else []
     pick = random.choice(events) if events else {"label": era["title"], "id": era["qid"], "start": era["start"]}
     wiki = wiki_summary(pick.get("wiki") or pick.get("label") or era["title"])
-    people = list_for(era["id"], "ppl").get("rows") or []
+    event_people = [
+        r for r in get_entities((pick.get("participants") or [])[:12]).values() if _person_ok(r, era)
+    ]
+    people = event_people or (list_for(era["id"], "ppl").get("rows") or [])
     images = gallery(era["id"]).get("rows") or []
     return {
         "ok": True,

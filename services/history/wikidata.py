@@ -99,11 +99,25 @@ def _parse_entity(raw: dict[str, Any]) -> dict[str, Any] | None:
     descs = raw.get("descriptions") or {}
     claims = raw.get("claims") or {}
     site = ((raw.get("sitelinks") or {}).get("itwiki") or {}).get("title") or ""
-    label = (labels.get("it") or labels.get("en") or {}).get("value") or qid
-    desc = (descs.get("it") or descs.get("en") or {}).get("value") or ""
+    label = (
+        (labels.get("it") or {}).get("value")
+        or (labels.get("en") or {}).get("value")
+        or (labels.get("mul") or {}).get("value")
+        or site.replace("_", " ")
+        or qid
+    )
+    desc = (
+        (descs.get("it") or {}).get("value")
+        or (descs.get("en") or {}).get("value")
+        or (descs.get("mul") or {}).get("value")
+        or ""
+    )
     start = _claim_time(claims, "P580") or _claim_time(claims, "P585") or _claim_time(claims, "P571")
     end = _claim_time(claims, "P582") or _claim_time(claims, "P576")
     types = _claim_ids(claims, "P31")
+    if "Q5" in types:
+        start = _claim_time(claims, "P569") or start
+        end = _claim_time(claims, "P570") or end
     return {
         "id": qid,
         "label": label,
@@ -144,8 +158,9 @@ def get_entities(qids: list[str]) -> dict[str, dict[str, Any]]:
                     "action": "wbgetentities",
                     "ids": "|".join(chunk),
                     "props": "labels|descriptions|claims|sitelinks",
-                    "languages": "it|en",
-                    "sitefilter": "itwiki",
+                    "languages": "it|en|mul",
+                    "languagefallback": "1",
+                    "sitefilter": "itwiki|enwiki",
                     "format": "json",
                 }
             )
