@@ -39,7 +39,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "19"
+QUERY_VER = "20"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -189,6 +189,9 @@ _GROCERY_MARKERS = (
     "aldi",
     "despar",
     "iperal",
+    "ipercoop",
+    "iper coop",
+    "ipermercato",
     "carrefour express",
     "carrefour market",
     "md discount",
@@ -463,16 +466,16 @@ def score_mall(row: dict[str, Any], tags: dict[str, Any]) -> int:
         if "rinascente" in name:
             extra += 6
     for token, pts in (
-        ("shopville", 7),
-        ("centro commerciale", 6),
+        ("shopville", 8),
+        ("le gru", 8),
+        ("8 gallery", 7),
         ("outlet", 6),
         ("gallerie", 5),
         ("gallery", 5),
         ("retail park", 5),
         ("megashopping", 4),
-        ("le gru", 6),
-        ("8 gallery", 6),
         ("lingotto", 4),
+        ("centro commerciale", 3),
     ):
         if token in name:
             extra += pts
