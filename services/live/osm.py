@@ -16,11 +16,12 @@ TELEGRAM_MAX_LEN = 3900
 
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
-DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 15, lo=8, hi=30)
-QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 12, lo=6, hi=25)
+DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 18, lo=8, hi=30)
+QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 14, lo=6, hi=25)
 OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 2, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=8, hi=120)
 LIST_LIMIT = 12
+QUERY_VER = "3"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -94,7 +95,14 @@ def accept_rail(tags: dict[str, Any]) -> bool:
     if _yes(tags, "bus") and not _yes(tags, "train") and railway != "station":
         return False
     train_station = _yes(tags, "train") or tags.get("building") == "train_station" or bool(_tag(tags, "uic_ref"))
-    return bool(train_station)
+    if not train_station:
+        return False
+    name = _tag(tags, "name:it", "name", "official_name").lower()
+    if any(bit in name for bit in ("bivio", "cabina", "deposito", "scalo merci", "terminali italia")):
+        return False
+    if str(tags.get("usage") or "").lower() in {"industrial", "military", "freight"}:
+        return False
+    return True
 
 
 def rank_rail(row: dict[str, Any]) -> tuple:
@@ -129,8 +137,8 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "emoji": "✈️",
         "title": "Aeroporti",
         "filters": (
-            'nw["aeroway"="aerodrome"]["iata"]["aerodrome"!="heliport"]["aerodrome"!="airstrip"]',
-            'nw["aeroway"="aerodrome"]["name"]["aerodrome"!="heliport"]["aerodrome"!="airstrip"]["aerodrome"!="helipad"]',
+            'nw["aeroway"="aerodrome"]["iata"]',
+            'nw["aeroway"="aerodrome"]["name"]',
         ),
         "accept": accept_aerodrome,
         "rank": rank_aerodrome,
@@ -141,9 +149,8 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "emoji": "🚆",
         "title": "Stazioni principali",
         "filters": (
-            'nw["railway"="station"]["train"="yes"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]["station"!="monorail"]',
-            'nw["building"="train_station"]["name"]["station"!="subway"]',
-            'nw["railway"="station"]["uic_ref"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]["station"!="monorail"]',
+            'nw["railway"="station"]["train"="yes"]',
+            'nw["building"="train_station"]["name"]',
         ),
         "accept": accept_rail,
         "rank": rank_rail,
@@ -272,7 +279,7 @@ def _bbox_ql(bbox: BBox) -> str:
 
 def _cache_key(bbox: BBox, cat: str) -> str:
     south, west, north, east = bbox
-    return f"osm:{south:.4f},{west:.4f},{north:.4f},{east:.4f}:{cat}"
+    return f"osm:{QUERY_VER}:{south:.4f},{west:.4f},{north:.4f},{east:.4f}:{cat}"
 
 
 def _copy_bundle(bundle: dict[str, Any], *, cached: bool) -> dict[str, Any]:
