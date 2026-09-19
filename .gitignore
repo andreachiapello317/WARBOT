@@ -12,3 +12,4 @@ __pycache__/
 *.key
 agent-tools/
 data/*.json
+data/*.tmp

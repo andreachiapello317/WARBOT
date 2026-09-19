@@ -36,6 +36,7 @@ from services.live.osm import (
     format_osm_map,
     format_osm_place,
     format_osm_world,
+    peek as osm_peek,
     resolve_category,
     search as osm_search_bbox,
 )
@@ -283,13 +284,15 @@ async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await show_osm_place(update, context)
         return
     _set_osm_wait(context, False)
-    await reply_html(
-        update,
-        context,
-        f"🌍 <b>OSM WORLD</b>\n\nInterrogo Overpass · {place.get('display')}…",
-        reply_markup=osm_place_keyboard(),
-    )
-    bundle = await asyncio.to_thread(osm_search_bbox, place["bbox"], cat)
+    bundle = osm_peek(place["bbox"], cat)
+    if bundle is None:
+        await reply_html(
+            update,
+            context,
+            f"🌍 <b>OSM WORLD</b>\n\nInterrogo Overpass · {place.get('display')}…",
+            reply_markup=osm_place_keyboard(),
+        )
+        bundle = await asyncio.to_thread(osm_search_bbox, place["bbox"], cat)
     rows = list(bundle.get("rows") or [])
     context.user_data[OSM_ROWS_KEY] = rows
     context.user_data[OSM_CAT_KEY] = cat

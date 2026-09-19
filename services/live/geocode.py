@@ -11,16 +11,19 @@ import urllib.parse
 import urllib.request
 from typing import Any, Protocol
 
+from services.live import cache as osm_cache
+
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; geocoder cache; not bulk)"
 PHOTON_URL = "https://photon.komoot.io/api/"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-CACHE_TTL = 6 * 3600
 NOMINATIM_GAP = 1.1
+PHOTON_TIMEOUT = osm_cache.int_env("OSM_GEOCODER_TIMEOUT", 4, lo=2, hi=12)
+NOMINATIM_TIMEOUT = osm_cache.int_env("OSM_NOMINATIM_TIMEOUT", 8, lo=4, hi=15)
+MISS_TTL = 90
 
 # south, west, north, east
 BBox = tuple[float, float, float, float]
 
-_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _nom_lock = threading.Lock()
 _nom_last = 0.0
 
@@ -30,7 +33,7 @@ class Geocoder(Protocol):
         """Restituisce luoghi: name, country, lat, lon, bbox, display."""
 
 
-def _get_json(url: str, headers: dict[str, str] | None = None, timeout: int = 18) -> Any:
+def _get_json(url: str, headers: dict[str, str] | None = None, timeout: int = 8) -> Any:
     hdrs = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if headers:
         hdrs.update(headers)
@@ -84,7 +87,7 @@ def _place(
 class PhotonGeocoder:
     def search(self, query: str, *, limit: int = 5) -> list[dict[str, Any]]:
         url = PHOTON_URL + "?" + urllib.parse.urlencode({"q": query, "limit": str(limit), "lang": "it"})
-        payload = _get_json(url)
+        payload = _get_json(url, timeout=PHOTON_TIMEOUT)
         hits: list[dict[str, Any]] = []
         for feat in payload.get("features") or []:
             geom = feat.get("geometry") or {}
@@ -128,9 +131,15 @@ class NominatimGeocoder:
                 time.sleep(wait)
             _nom_last = time.time()
         url = self.base_url + "?" + urllib.parse.urlencode(
-            {"q": query, "format": "jsonv2", "addressdetails": "1", "limit": str(limit)}
+            {
+                "q": query,
+                "format": "jsonv2",
+                "addressdetails": "1",
+                "limit": str(limit),
+                "accept-language": "it",
+            }
         )
-        payload = _get_json(url)
+        payload = _get_json(url, timeout=NOMINATIM_TIMEOUT)
         hits: list[dict[str, Any]] = []
         if not isinstance(payload, list):
             return hits
@@ -176,16 +185,24 @@ def _run_backend(name: str, query: str, limit: int) -> list[dict[str, Any]]:
     return PhotonGeocoder().search(query, limit=limit)
 
 
+def _rank(hit: dict[str, Any]) -> tuple:
+    kind = str(hit.get("osm_value") or "").lower()
+    prefer = {"city": 0, "town": 1, "municipality": 2, "village": 3, "suburb": 4, "administrative": 5}
+    return (prefer.get(kind, 8), hit.get("name") or "")
+
+
 def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
-    """Cerca un luogo per nome. Cache lunga; Nominatim solo se Photon è vuoto o è il backend scelto."""
+    """Solo geocoding. Cache lunga; Nominatim solo se Photon è vuoto, lento o è il backend scelto."""
     q = " ".join((query or "").split())
     if len(q) < 2:
         return {"ok": False, "error": "scrivi almeno due lettere", "hits": [], "query": q}
-    key = f"{_backend()}|{q.lower()}|{limit}"
-    now = time.time()
-    hit = _CACHE.get(key)
-    if hit and now - hit[0] < CACHE_TTL:
-        return {"ok": True, "hits": hit[1], "query": q, "cached": True}
+    key = f"geo:{_backend()}|{q.lower()}|{limit}"
+    cached = osm_cache.get(key)
+    if isinstance(cached, dict) and "hits" in cached:
+        hits = list(cached.get("hits") or [])
+        if hits:
+            return {"ok": True, "hits": hits, "query": q, "cached": True}
+        return {"ok": False, "error": cached.get("error") or "nessun luogo trovato", "hits": [], "query": q, "cached": True}
 
     primary = _backend()
     fallback = "nominatim" if primary != "nominatim" else "photon"
@@ -193,21 +210,17 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
     error = ""
     try:
         rows = _run_backend(primary, q, limit)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError, KeyError) as exc:
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError, KeyError, OSError) as exc:
         error = str(exc)
     if not rows:
         try:
             rows = _run_backend(fallback, q, limit)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError, KeyError) as exc:
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError, KeyError, OSError) as exc:
             error = error or str(exc)
     if not rows:
+        osm_cache.put(key, {"hits": [], "error": error or "nessun luogo trovato"}, MISS_TTL)
         return {"ok": False, "error": error or "nessun luogo trovato", "hits": [], "query": q}
 
-    def _rank(hit: dict[str, Any]) -> tuple:
-        kind = str(hit.get("osm_value") or "").lower()
-        prefer = {"city": 0, "town": 1, "municipality": 2, "village": 3, "suburb": 4, "administrative": 5}
-        return (prefer.get(kind, 8), hit.get("name") or "")
-
     rows.sort(key=_rank)
-    _CACHE[key] = (now, rows)
+    osm_cache.put(key, {"hits": rows}, osm_cache.GEOCODE_TTL)
     return {"ok": True, "hits": rows, "query": q, "cached": False}

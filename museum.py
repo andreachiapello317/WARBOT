@@ -279,7 +279,7 @@ def render_help() -> str:
     <p class="lead">OSM WORLD è solo questo: cerchi un luogo, scegli una categoria, Overpass risponde.</p>
     <div class="grid">
       <div class="card"><h2>🔎 Luogo</h2><p>Geocoder OSM (Photon, Nominatim in fallback), con cache. Non scarica la città intera.</p></div>
-      <div class="card"><h2>🚆 Stazioni</h2><p>Treni: train=yes, UIC, train_station. Niente metro, bus, fermate, piattaforme.</p></div>
+      <div class="card"><h2>🚆 Stazioni principali</h2><p>Treni passeggeri: train=yes, UIC, train_station. Niente metro, tram, bus, piattaforme, fermate.</p></div>
       <div class="card"><h2>🗺️ Mappa</h2><p>Foglio OpenStreetMap del riquadro. Le liste restano Overpass per categoria.</p></div>
     </div>
     """

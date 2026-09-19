@@ -10,18 +10,20 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
+from services.live import cache as osm_cache
+
 TELEGRAM_MAX_LEN = 3900
 
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
-DEFAULT_TIMEOUT = 45
-QUERY_TIMEOUT = 25
-OVERPASS_RETRIES = 3
+DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 15, lo=8, hi=30)
+QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 12, lo=6, hi=25)
+OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 2, lo=1, hi=3)
+OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=8, hi=120)
 LIST_LIMIT = 12
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
-_CACHE: dict[str, tuple[float, Any]] = {}
 
 AcceptFn = Callable[[dict[str, Any]], bool]
 RankFn = Callable[[dict[str, Any]], tuple]
@@ -58,7 +60,7 @@ def accept_aerodrome(tags: dict[str, Any]) -> bool:
     if tags.get("aeroway") != "aerodrome":
         return False
     kind = str(tags.get("aerodrome") or "").lower()
-    return kind not in {"heliport"}
+    return kind not in {"heliport", "airstrip", "helipad"}
 
 
 def rank_aerodrome(row: dict[str, Any]) -> tuple:
@@ -71,29 +73,28 @@ def rank_aerodrome(row: dict[str, Any]) -> tuple:
 
 
 def accept_rail(tags: dict[str, Any]) -> bool:
+    """Rete di sicurezza: la query Overpass è già selettiva."""
     railway = str(tags.get("railway") or "")
-    station = str(tags.get("station") or "")
+    station = str(tags.get("station") or "").lower()
     public = str(tags.get("public_transport") or "")
-    if railway in {"halt", "tram_stop", "subway_entrance", "platform", "stop", "halt_position"}:
+    if railway in {"halt", "tram_stop", "subway_entrance", "platform", "stop", "halt_position", "tram"}:
         return False
-    if public in {"stop_position", "platform"}:
+    if public in {"stop_position", "platform", "stop_area"}:
         return False
     if tags.get("highway") == "bus_stop":
         return False
     if tags.get("amenity") == "bus_station" and not (_yes(tags, "train") or railway == "station"):
         return False
-    if railway == "platform" or tags.get("railway") == "subway_entrance":
+    if station in {"subway", "light_rail", "tram", "monorail"}:
         return False
-    subway_only = station == "subway" or (_yes(tags, "subway") and not _yes(tags, "train"))
-    light = station in {"light_rail", "tram"} or (_yes(tags, "tram") and not _yes(tags, "train"))
-    if subway_only or light:
+    if _yes(tags, "subway") and not _yes(tags, "train"):
+        return False
+    if _yes(tags, "tram", "light_rail") and not _yes(tags, "train"):
         return False
     if _yes(tags, "bus") and not _yes(tags, "train") and railway != "station":
         return False
     train_station = _yes(tags, "train") or tags.get("building") == "train_station" or bool(_tag(tags, "uic_ref"))
-    if train_station:
-        return True
-    return railway == "station" and station not in {"subway", "light_rail", "monorail", "tram"} and not _yes(tags, "subway")
+    return bool(train_station)
 
 
 def rank_rail(row: dict[str, Any]) -> tuple:
@@ -121,84 +122,95 @@ def rank_wiki(row: dict[str, Any]) -> tuple:
 
 
 # Filtri Overpass: una categoria per tap. south,west,north,east nel QL.
+# nw (niente relations) + tag selettivi + out center LIMIT. Niente download-tutto.
 CATEGORIES: dict[str, dict[str, Any]] = {
     "aero": {
         "id": "aero",
         "emoji": "✈️",
         "title": "Aeroporti",
-        "filters": ('nwr["aeroway"="aerodrome"]',),
+        "filters": (
+            'nw["aeroway"="aerodrome"]["iata"]["aerodrome"!="heliport"]["aerodrome"!="airstrip"]',
+            'nw["aeroway"="aerodrome"]["name"]["aerodrome"!="heliport"]["aerodrome"!="airstrip"]["aerodrome"!="helipad"]',
+        ),
         "accept": accept_aerodrome,
         "rank": rank_aerodrome,
+        "out_limit": 24,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
-        "title": "Stazioni ferroviarie",
+        "title": "Stazioni principali",
         "filters": (
-            'nwr["railway"="station"]',
-            'nwr["building"="train_station"]',
+            'nw["railway"="station"]["train"="yes"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]["station"!="monorail"]',
+            'nw["building"="train_station"]["name"]["station"!="subway"]',
+            'nw["railway"="station"]["uic_ref"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]["station"!="monorail"]',
         ),
         "accept": accept_rail,
         "rank": rank_rail,
+        "out_limit": 40,
     },
     "hosp": {
         "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
-        "filters": ('nwr["amenity"="hospital"]',),
+        "filters": ('nw["amenity"="hospital"]["name"]',),
         "accept": accept_named,
         "rank": rank_wiki,
+        "out_limit": 40,
     },
     "port": {
         "id": "port",
         "emoji": "⚓",
         "title": "Porti",
         "filters": (
-            'nwr["landuse"="harbour"]',
-            'nwr["industrial"="port"]',
-            'nwr["harbour"="yes"]',
+            'nw["industrial"="port"]["name"]',
+            'nw["landuse"="harbour"]["name"]',
+            'nw["harbour"="yes"]["name"]',
         ),
-        "accept": lambda tags: True,
+        "accept": accept_named,
         "rank": rank_wiki,
+        "out_limit": 24,
     },
     "stad": {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "filters": ('nwr["leisure"="stadium"]',),
+        "filters": ('nw["leisure"="stadium"]["name"]',),
         "accept": accept_named,
         "rank": rank_wiki,
+        "out_limit": 30,
+    },
+    "mall": {
+        "id": "mall",
+        "emoji": "🏬",
+        "title": "Centri commerciali",
+        "filters": (
+            'nw["shop"="mall"]["name"]',
+            'nw["shop"="department_store"]["name"]',
+        ),
+        "accept": accept_named,
+        "rank": rank_wiki,
+        "out_limit": 30,
     },
     "land": {
         "id": "land",
         "emoji": "🏛️",
         "title": "Luoghi principali",
         "filters": (
-            'nwr["tourism"="attraction"]["wikidata"]',
-            'nwr["historic"="monument"]',
-            'nwr["historic"="castle"]',
-            'nwr["historic"="palace"]',
-            'nwr["tourism"="museum"]',
-            'nwr["amenity"="townhall"]',
-            'nwr["building"="cathedral"]',
+            'nw["tourism"="attraction"]["wikidata"]["name"]',
+            'nw["historic"="castle"]["name"]',
+            'nw["historic"="palace"]["name"]',
+            'nw["historic"="monument"]["wikidata"]',
+            'nw["amenity"="townhall"]["name"]',
+            'nw["building"="cathedral"]["name"]',
         ),
         "accept": accept_named,
         "rank": rank_wiki,
-    },
-    "mall": {
-        "id": "mall",
-        "emoji": "🛍️",
-        "title": "Centri commerciali",
-        "filters": (
-            'nwr["shop"="mall"]',
-            'nwr["shop"="department_store"]',
-        ),
-        "accept": accept_named,
-        "rank": rank_wiki,
+        "out_limit": 40,
     },
 }
 
-WORLD_CATEGORIES = ("aero", "rail", "hosp", "port", "stad", "land", "mall")
+WORLD_CATEGORIES = ("aero", "rail", "hosp", "port", "stad", "mall", "land")
 
 _ALIASES = {
     "aero": "aero",
@@ -238,7 +250,7 @@ def resolve_category(raw: str | None) -> str | None:
     return _ALIASES.get(key) if key in _ALIASES else (key if key in CATEGORIES else None)
 
 
-def parse_bbox(bbox: BBox | str | tuple[float, ...]) -> BBox:
+def parse_bbox(bbox: BBox | str | tuple[float, ...] | list[float]) -> BBox:
     if isinstance(bbox, str):
         parts = [p.strip() for p in bbox.replace(";", ",").split(",") if p.strip()]
         if len(parts) != 4:
@@ -258,15 +270,32 @@ def _bbox_ql(bbox: BBox) -> str:
     return f"({south},{west},{north},{east})"
 
 
-def _cached(key: str, ttl: float, loader):
-    now = time.time()
-    hit = _CACHE.get(key)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
-    value = loader()
-    if isinstance(value, dict) and value.get("ok"):
-        _CACHE[key] = (now, value)
-    return value
+def _cache_key(bbox: BBox, cat: str) -> str:
+    south, west, north, east = bbox
+    return f"osm:{south:.4f},{west:.4f},{north:.4f},{east:.4f}:{cat}"
+
+
+def _copy_bundle(bundle: dict[str, Any], *, cached: bool) -> dict[str, Any]:
+    rows = list(bundle.get("rows") or [])
+    out = dict(bundle)
+    out["rows"] = rows
+    out["cached"] = cached
+    return out
+
+
+def peek(bbox: BBox | str, category: str) -> dict[str, Any] | None:
+    """Risultato categoria in cache, senza Overpass. None se assente o scaduto."""
+    cat = resolve_category(category)
+    if not cat:
+        return None
+    try:
+        box = parse_bbox(bbox)
+    except (TypeError, ValueError):
+        return None
+    hit = osm_cache.get(_cache_key(box, cat))
+    if isinstance(hit, dict) and hit.get("ok"):
+        return _copy_bundle(hit, cached=True)
+    return None
 
 
 def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -310,7 +339,7 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
             payload.setdefault("elements", [])
             return payload
         if attempt < OVERPASS_RETRIES - 1:
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": last_error, "detail": last_detail, "elements": []}
 
 
@@ -382,10 +411,14 @@ def normalize_element(el: dict[str, Any], *, category: str) -> dict[str, Any] | 
     }
 
 
-def _build_query(bbox: BBox, filters: tuple[str, ...], *, timeout: int = QUERY_TIMEOUT) -> str:
+def _build_query(bbox: BBox, filters: tuple[str, ...], *, timeout: int, limit: int) -> str:
     area = _bbox_ql(bbox)
     union = "\n  ".join(f"{flt}{area};" for flt in filters)
-    return f"[out:json][timeout:{timeout}];\n(\n  {union}\n);\nout center;"
+    return (
+        f"[out:json][timeout:{timeout}][maxsize:8388608];\n"
+        f"(\n  {union}\n);\n"
+        f"out center {limit};"
+    )
 
 
 def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -397,66 +430,77 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         box = parse_bbox(bbox)
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc), "rows": [], "total": 0}
+
+    hit = peek(box, cat)
+    if hit is not None:
+        return hit
+
     meta = CATEGORIES[cat]
     filters = tuple(meta["filters"])
     rank: RankFn = meta.get("rank") or (lambda r: (r["name"].lower(),))
+    limit = int(meta.get("out_limit") or OUT_LIMIT)
+    query = _build_query(box, filters, timeout=QUERY_TIMEOUT, limit=limit)
+    payload = overpass(query, timeout=timeout)
+    if not payload.get("ok"):
+        return {
+            "ok": False,
+            "error": payload.get("error") or "Overpass fallito",
+            "detail": payload.get("detail") or "",
+            "category": cat,
+            "bbox": box,
+            "rows": [],
+            "total": 0,
+            "query": query,
+            "cached": False,
+        }
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for el in payload.get("elements") or []:
+        if not isinstance(el, dict):
+            continue
+        item = normalize_element(el, category=cat)
+        if not item or item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        rows.append(item)
+    merged: dict[tuple, dict[str, Any]] = {}
+    for item in rows:
+        key = (item["name"].lower(), round(item["lat"], 3), round(item["lon"], 3))
+        prev = merged.get(key)
+        if prev is None:
+            merged[key] = item
+            continue
 
-    def load() -> dict[str, Any]:
-        query = _build_query(box, filters)
-        payload = overpass(query, timeout=timeout)
-        if not payload.get("ok"):
-            return {
-                "ok": False,
-                "error": payload.get("error") or "Overpass fallito",
-                "detail": payload.get("detail") or "",
-                "category": cat,
-                "bbox": box,
-                "rows": [],
-                "total": 0,
-                "query": query,
-            }
-        rows: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for el in payload.get("elements") or []:
-            if not isinstance(el, dict):
-                continue
-            item = normalize_element(el, category=cat)
-            if not item or item["id"] in seen:
-                continue
-            seen.add(item["id"])
-            rows.append(item)
-        merged: dict[tuple, dict[str, Any]] = {}
-        for item in rows:
-            key = (item["name"].lower(), round(item["lat"], 3), round(item["lon"], 3))
-            prev = merged.get(key)
-            if prev is None:
-                merged[key] = item
-                continue
-            score = lambda r: (
+        def score(r: dict[str, Any]) -> tuple:
+            return (
                 bool(r.get("uic")),
                 bool(r.get("iata")),
                 bool(r.get("wikidata")),
                 bool(r.get("website")),
                 r.get("osm_type") == "way",
             )
-            if score(item) > score(prev):
-                merged[key] = item
-        rows = list(merged.values())
-        rows.sort(key=rank)
-        return {
-            "ok": True,
-            "category": cat,
-            "title": meta["title"],
-            "emoji": meta["emoji"],
-            "bbox": box,
-            "rows": rows,
-            "total": len(rows),
-            "source": "OpenStreetMap / Overpass",
-            "ts": time.time(),
-            "query": query,
-        }
 
-    return _cached(f"osm:{box}:{cat}", 180, load)
+        if score(item) > score(prev):
+            merged[key] = item
+    rows = list(merged.values())
+    rows.sort(key=rank)
+    for item in rows:
+        item.pop("tags", None)
+    bundle = {
+        "ok": True,
+        "category": cat,
+        "title": meta["title"],
+        "emoji": meta["emoji"],
+        "bbox": box,
+        "rows": rows,
+        "total": len(rows),
+        "source": "OpenStreetMap / Overpass",
+        "ts": time.time(),
+        "query": query,
+        "cached": False,
+    }
+    osm_cache.put(_cache_key(box, cat), {k: v for k, v in bundle.items() if k != "cached"}, osm_cache.OVERPASS_TTL)
+    return bundle
 
 
 def format_osm_world() -> str:
@@ -495,7 +539,7 @@ def format_osm_place(place: dict[str, Any]) -> str:
         f"📍 <b>{e(place.get('display') or place.get('name'))}</b>",
         f"{place['lat']:.4f}, {place['lon']:.4f}",
         "",
-        "Tocca una categoria. Non scarico tutta la città in un colpo.",
+        "Tocca una categoria. Overpass parte solo allora.",
     ]
     if note:
         lines.append("")
@@ -526,9 +570,10 @@ def format_osm_category(bundle: dict[str, Any], place: dict[str, Any] | None = N
     where = ""
     if place:
         where = f" · {e(place.get('display') or place.get('name'))}"
+    cached = " · cache" if bundle.get("cached") else ""
     lines = [
         f"{bundle.get('emoji', '🗺️')} <b>{e(bundle.get('title'))}</b>{where}",
-        f"{bundle.get('total', 0)} elementi · tocca una scheda",
+        f"{bundle.get('total', 0)} elementi{cached} · tocca una scheda",
         "",
     ]
     rows = bundle.get("rows") or []
