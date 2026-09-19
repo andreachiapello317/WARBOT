@@ -15,11 +15,11 @@ Non è un manuale operativo. I testi descrivono guerre, eserciti, mezzi e tratta
 | ⚙️ **Ferro** | Equipaggiamento, mezzi, fortificazioni, spazio militare |
 | 🕊️ **Patti** | Trattati, pace, personaggi, strategia come storia |
 
-In home: **Oggi**, **Casuale**, **Cerca**, **Quiz**, **Live**, **Esplora**.
+In home, in cima: **📡 Posizioni live**. Poi **Oggi**, **Casuale**, **Cerca**, **Quiz**, **Esplora**.
 
 ## Live (aerei, navi, ISS)
 
-Quadro **📡 Live**: posizioni vere, adesso, da radio aperte. Non è un radar militare e non serve a inseguire bersagli.
+Quadro **📡 Posizioni live**: all'apertura mostra già ISS, aerei sull'Italia e navi del Baltico. Non è un radar militare e non serve a inseguire bersagli.
 
 | Feed | Fonte | Cosa vedi |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ cerca - Ricerca universale
 quiz - Quiz storico
 oggi - Scheda del giorno
 casuale - Una scheda a caso
-live - Aerei, navi, ISS in diretta
+live - Posizioni live: aerei, navi, ISS
 aerei - ADS-B pubblico su una zona
 navi - AIS aperto del Baltico
 iss - Posizione della stazione spaziale

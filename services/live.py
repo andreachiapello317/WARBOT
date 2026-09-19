@@ -7,6 +7,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from services.catalog import clip, e
@@ -282,16 +283,92 @@ def fetch_ships() -> dict[str, Any]:
     return _cached("ships", 25, load)
 
 
-def format_live_hub() -> str:
-    return (
-        "📡 <b>LIVE</b>\n\n"
-        "Posizioni vere, adesso, da radio aperte.\n\n"
-        "✈️ <b>Aerei</b> — ADS-B pubblico (adsb.fi), zone a scelta\n"
-        "🚁 <b>Elicotteri</b> — stesso feed, solo categoria eli\n"
-        "⚓ <b>Navi</b> — AIS aperto del Baltico finlandese\n"
-        "🛰️ <b>ISS</b> — stazione spaziale, lat/lon/altezza\n\n"
-        f"<i>{LIVE_NOTE}</i>"
-    )
+def fetch_hub(region: str = "it") -> dict[str, Any]:
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        fac = pool.submit(fetch_aircraft, region)
+        fsh = pool.submit(fetch_ships)
+        fis = pool.submit(fetch_iss)
+        return {"ac": fac.result(), "ships": fsh.result(), "iss": fis.result(), "region": region}
+
+
+def format_live_hub(snapshot: dict[str, Any] | None = None) -> str:
+    lines = [
+        "📡 <b>POSIZIONI LIVE</b>",
+        "Aerei, navi e stazione spaziale — adesso, da radio aperte.",
+        "",
+    ]
+    if not snapshot:
+        lines += [
+            "✈️ Aerei sull'Italia, il Mediterraneo e altre zone",
+            "⚓ Navi del Baltico (AIS finlandese)",
+            "🛰️ ISS in orbita, con mappa",
+            "",
+            f"<i>{LIVE_NOTE}</i>",
+        ]
+        return clip("\n".join(lines))
+
+    iss = snapshot.get("iss") or {}
+    ac = snapshot.get("ac") or {}
+    ships = snapshot.get("ships") or {}
+
+    if iss.get("ok"):
+        vis = {"daylight": "al sole", "eclipsed": "in ombra", "visible": "visibile"}.get(
+            iss.get("visibility") or "", iss.get("visibility") or "—"
+        )
+        place = iss.get("place") or "posizione non etichettata"
+        lines += [
+            "🛰️ <b>ISS</b>",
+            f"📍 {iss['lat']:.2f}, {iss['lon']:.2f} · {e(place)}",
+            f"{iss.get('alt_km') or 0:.0f} km · {iss.get('vel_kmh') or 0:.0f} km/h · {e(vis)}",
+            f"<a href=\"{iss['map']}\">apri la mappa della stazione</a>",
+            "",
+        ]
+    else:
+        lines += ["🛰️ <b>ISS</b> — stazione non raggiungibile in questo istante.", ""]
+
+    if ac.get("ok"):
+        airborne = [r for r in (ac.get("rows") or []) if not r["on_ground"]][:4]
+        lines.append(
+            f"✈️ <b>Aerei · {e(ac.get('title'))}</b> — "
+            f"{ac.get('airborne', 0)} in volo su {ac.get('total', 0)} tracciati"
+        )
+        if airborne:
+            cfg = REGIONS.get(ac.get("region") or "it") or REGIONS["it"]
+            lines.append(f"<a href=\"{osm_url(cfg['lat'], cfg['lon'], 6)}\">mappa della zona</a>")
+        for row in airborne:
+            icon = "🚁" if row["heli"] else "✈️"
+            lines.append(
+                f"{icon} <b>{e(row['flight'])}</b> · {e(row['desc'])} · "
+                f"{int(row['alt_ft'] or 0)} ft · {row['lat']:.2f}, {row['lon']:.2f}"
+            )
+        if not airborne:
+            lines.append("Nessun aereo in volo in questa finestra.")
+        lines.append("")
+    else:
+        lines += ["✈️ <b>Aerei</b> — feed ADS-B non ha risposto.", ""]
+
+    if ships.get("ok"):
+        moving = (ships.get("rows") or [])[:3]
+        lines.append(
+            f"⚓ <b>Navi · Baltico</b> — {ships.get('moving', 0)} in moto su {ships.get('total', 0)}"
+        )
+        for row in moving:
+            dest = f" → {e(row['dest'])}" if row.get("dest") else ""
+            spd = f"{row['sog_kn']:.1f} kn" if row.get("sog_kn") is not None else "—"
+            lines.append(
+                f"🚢 <b>{e(row['name'])}</b> · {e(row['kind'])}{dest} · "
+                f"{spd} · {row['lat']:.2f}, {row['lon']:.2f}"
+            )
+        lines.append("")
+    else:
+        lines += ["⚓ <b>Navi</b> — AIS del Baltico non ha risposto.", ""]
+
+    lines += [
+        "I bottoni sotto aprono la lista completa e le altre zone.",
+        "",
+        f"<i>{LIVE_NOTE}</i>",
+    ]
+    return clip("\n".join(lines))
 
 
 def format_aircraft(bundle: dict[str, Any], *, heli_only: bool = False) -> str:

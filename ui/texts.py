@@ -9,6 +9,8 @@ def home_text() -> str:
         "⚔️ <b>WARBOT</b>\n"
         "Museo della storia militare.\n\n"
         "Sei mondi, un filo: capire guerre, eserciti e pace senza trasformarli in un manuale.\n\n"
+        "📡 <b>POSIZIONI LIVE</b> — il bottone in cima. Aerei, navi, ISS: coordinate vere, adesso.\n"
+        "Comando: /live\n\n"
         "⚔️ <b>EPOCHE</b> — guerre storiche, dall'antichità al Novecento\n"
         "🗺️ <b>CAMPI</b> — battaglie, fasi, conseguenze\n"
         "🪖 <b>TRUPPE</b> — ruoli del soldato e gradi\n"
@@ -16,8 +18,7 @@ def home_text() -> str:
         "⚙️ <b>FERRO</b> — equipaggiamento, mezzi, fortificazioni\n"
         "🕊️ <b>PATTI</b> — trattati, personaggi, strategia come storia\n\n"
         "📖 <b>OGGI</b> pesca una scheda del giorno.\n"
-        "🎲 <b>CASUALE</b> apre un cassetto a caso.\n"
-        "📡 <b>LIVE</b> mostra aerei, navi e ISS sulle radio aperte, adesso.\n\n"
+        "🎲 <b>CASUALE</b> apre un cassetto a caso.\n\n"
         f"<i>{DISCLAIMER}</i>"
     )
 
@@ -31,7 +32,8 @@ def esplora_text() -> str:
         "🪖 Truppe — chi c'era, e con quale grado\n"
         "🏳️ Bandiere — gli eserciti\n"
         "⚙️ Ferro — oggetti e opere\n"
-        "🕊️ Patti — la pace e chi ha firmato\n\n"
+        "🕊️ Patti — la pace e chi ha firmato\n"
+        "📡 Posizioni live — aerei, navi, ISS in diretta\n\n"
         f"<i>{DISCLAIMER}</i>"
     )
 
@@ -88,10 +90,10 @@ def help_text() -> str:
         "/quiz — indovina guerra, battaglia, grado…\n"
         "/oggi — scheda del giorno\n"
         "/casuale — un cassetto a caso\n"
-        "/live — aerei, navi, ISS in diretta (radio pubbliche)\n"
+        "/live — posizioni live: aerei, navi, ISS (radio pubbliche)\n"
         "/aerei — ADS-B su una zona (it, med, eu, uk, us, jp)\n"
         "/navi — AIS aperto del Baltico finlandese\n"
-        "/iss — stazione spaziale, lat/lon/altezza\n"
+        "/iss — mappa e quota della stazione spaziale\n"
         "/aiuto — questo elenco\n\n"
         "Ogni schermata ha ⬅️ Indietro e 🏠 Inizio.\n"
         "Un solo messaggio in chat: i bottoni lo aggiornano.\n\n"

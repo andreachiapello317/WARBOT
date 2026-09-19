@@ -46,6 +46,7 @@ from services.catalog import (
 from services.live import (
     REGIONS,
     fetch_aircraft,
+    fetch_hub,
     fetch_iss,
     fetch_ships,
     format_aircraft,
@@ -146,6 +147,7 @@ async def deliver_text(
     text: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
+    preview: bool = False,
 ) -> None:
     chat = update.effective_chat
     if chat is None:
@@ -153,6 +155,7 @@ async def deliver_text(
     text = clip(text, TELEGRAM_MAX_LEN)
     last = _last_bot_msg(context)
     markup = reply_markup if reply_markup is not None else EMPTY_KEYBOARD
+    hide_preview = not preview
 
     if last and last.get("kind") == "text":
         try:
@@ -161,7 +164,7 @@ async def deliver_text(
                 message_id=int(last["id"]),
                 text=text,
                 parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
+                disable_web_page_preview=hide_preview,
                 reply_markup=markup,
             )
             return
@@ -175,7 +178,7 @@ async def deliver_text(
         chat_id=chat.id,
         text=text,
         parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True,
+        disable_web_page_preview=hide_preview,
         reply_markup=markup,
     )
     _remember_bot_msg(context, sent.message_id, "text")
@@ -187,8 +190,9 @@ async def reply_html(
     text: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
+    preview: bool = False,
 ) -> None:
-    await deliver_text(update, context, text, reply_markup=reply_markup)
+    await deliver_text(update, context, text, reply_markup=reply_markup, preview=preview)
 
 
 def _nav_should_skip(token: str) -> bool:
@@ -513,7 +517,20 @@ def _live_region(raw: str | None) -> str:
 
 
 async def show_live_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_html(update, context, format_live_hub(), reply_markup=live_hub_keyboard())
+    await reply_html(
+        update,
+        context,
+        "📡 <b>POSIZIONI LIVE</b>\n\nInterrogo aerei, navi e la stazione spaziale…",
+        reply_markup=live_hub_keyboard(),
+    )
+    snapshot = await asyncio.to_thread(fetch_hub)
+    await reply_html(
+        update,
+        context,
+        format_live_hub(snapshot),
+        reply_markup=live_hub_keyboard(),
+        preview=True,
+    )
 
 
 async def show_live_aircraft(
@@ -537,6 +554,7 @@ async def show_live_aircraft(
         context,
         format_aircraft(bundle, heli_only=heli),
         reply_markup=live_region_keyboard(kind, region),
+        preview=True,
     )
 
 
@@ -548,7 +566,7 @@ async def show_live_ships(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=live_misc_keyboard("live:ships"),
     )
     bundle = await asyncio.to_thread(fetch_ships)
-    await reply_html(update, context, format_ships(bundle), reply_markup=live_misc_keyboard("live:ships"))
+    await reply_html(update, context, format_ships(bundle), reply_markup=live_misc_keyboard("live:ships"), preview=True)
 
 
 async def show_live_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -559,7 +577,7 @@ async def show_live_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         reply_markup=live_misc_keyboard("live:iss"),
     )
     bundle = await asyncio.to_thread(fetch_iss)
-    await reply_html(update, context, format_iss(bundle), reply_markup=live_misc_keyboard("live:iss"))
+    await reply_html(update, context, format_iss(bundle), reply_markup=live_misc_keyboard("live:iss"), preview=True)
 
 
 async def open_live(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, extra: str) -> None:
@@ -710,6 +728,10 @@ async def post_init(application: Application) -> None:
         await application.bot.set_my_commands(
             [
                 BotCommand("start", "I sei mondi del museo"),
+                BotCommand("live", "Posizioni live: aerei, navi, ISS"),
+                BotCommand("aerei", "Aerei in volo su una zona"),
+                BotCommand("navi", "Navi AIS del Baltico"),
+                BotCommand("iss", "Mappa della stazione spaziale"),
                 BotCommand("esplora", "Mappa dei mondi"),
                 BotCommand("epoche", "Guerre storiche"),
                 BotCommand("campi", "Battaglie"),
@@ -721,10 +743,6 @@ async def post_init(application: Application) -> None:
                 BotCommand("quiz", "Quiz storico"),
                 BotCommand("oggi", "Scheda del giorno"),
                 BotCommand("casuale", "Una scheda a caso"),
-                BotCommand("live", "Aerei, navi, ISS in diretta"),
-                BotCommand("aerei", "ADS-B pubblico su una zona"),
-                BotCommand("navi", "AIS aperto del Baltico"),
-                BotCommand("iss", "Posizione della stazione spaziale"),
                 BotCommand("aiuto", "Elenco comandi"),
             ]
         )

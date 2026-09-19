@@ -25,9 +25,9 @@ from services.live import (
     LIVE_NOTE,
     REGIONS,
     fetch_aircraft,
+    fetch_hub,
     fetch_iss,
     fetch_ships,
-    format_live_hub,
 )
 from services.models import DISCLAIMER, ERA_LABELS, KIND_LABELS, WORLDS
 from services.quiz import build_quiz
@@ -54,7 +54,7 @@ def nav() -> str:
         <a class="chip" href="/casuale">🎲 Casuale</a>
         <a class="chip" href="/cerca">🔍 Cerca</a>
         <a class="chip" href="/quiz">🎲 Quiz</a>
-        <a class="chip" href="/live">📡 Live</a>
+        <a class="chip" href="/live">📡 Posizioni live</a>
       </nav>
     </header>"""
 
@@ -103,6 +103,11 @@ def layout(title: str, body: str, *, lead: str = "", extra_head: str = "", extra
       border-radius:14px; min-height:140px; display:flex; flex-direction:column; gap:8px;
     }}
     .card:hover {{ border-color:var(--brass); }}
+    .card.live {{
+      border-color:var(--brass);
+      background:linear-gradient(165deg, #2c341c 0%, var(--panel) 55%);
+      min-height:120px;
+    }}
     .card h2 {{ margin:0; font-size:1.25rem; }}
     .card p {{ margin:0; color:var(--muted); line-height:1.45; }}
     .meta {{ display:flex; flex-wrap:wrap; gap:8px 14px; color:var(--muted); margin:16px 0; }}
@@ -178,11 +183,11 @@ def render_home() -> str:
     )
     extras = """
     <div class="grid">
+      <a class="card live" href="/live"><h2>📡 Posizioni live</h2><p>Aerei in volo, navi del Baltico, ISS. Coordinate vere, aggiornate adesso. Tocca qui.</p></a>
       <a class="card" href="/oggi"><h2>📖 Oggi</h2><p>La scheda del giorno, come COSMICO ma da museo.</p></a>
       <a class="card" href="/casuale"><h2>🎲 Casuale</h2><p>Un cassetto a caso.</p></a>
       <a class="card" href="/cerca"><h2>🔍 Cerca</h2><p>Scrivi Stalingrado e vedi i ponti.</p></a>
       <a class="card" href="/quiz"><h2>🎲 Quiz</h2><p>Dieci modi per mettere alla prova il catalogo.</p></a>
-      <a class="card" href="/live"><h2>📡 Live</h2><p>Aerei ADS-B, navi AIS, ISS. Radio aperte, adesso.</p></a>
     </div>"""
     body = f"{telegramish(home_text())}<div class='grid'>{worlds}</div>{extras}"
     return layout("Museo", body)
@@ -198,7 +203,7 @@ def render_world(key: str) -> str:
         )
         filters = f'<p class="meta">{filters}</p>'
     elif key == "ferro":
-        filters = '<p class="meta"><a class="chip" href="/live">📡 Live aerei, navi, ISS</a></p>'
+        filters = '<p class="meta"><a class="chip" href="/live">📡 Posizioni live: aerei, navi, ISS</a></p>'
     tiles = "".join(card_tile(item) for item in rows)
     body = f"<h1>{meta['emoji']} {h(meta['title'])}</h1>{telegramish(world_text(key))}{filters}<div class='grid'>{tiles}</div>"
     return layout(meta["title"], body)
@@ -385,23 +390,94 @@ def _leaflet(points: list[dict], center: tuple[float, float], zoom: int) -> str:
 
 
 def render_live_hub() -> str:
-    cards = """
+    snap = fetch_hub()
+    iss = snap.get("iss") or {}
+    ac = snap.get("ac") or {}
+    ships = snap.get("ships") or {}
+    points: list[dict] = []
+    if iss.get("ok"):
+        place = iss.get("place") or "ISS"
+        points.append(
+            {
+                "lat": iss["lat"],
+                "lon": iss["lon"],
+                "kind": "iss",
+                "label": (
+                    f"<b>ISS</b><br>{html.escape(str(place))}<br>"
+                    f"{(iss.get('alt_km') or 0):.0f} km · {(iss.get('vel_kmh') or 0):.0f} km/h"
+                ),
+            }
+        )
+    airborne = [r for r in (ac.get("rows") or []) if not r.get("on_ground")][:50]
+    for r in airborne:
+        points.append(
+            {
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "kind": "heli" if r.get("heli") else "ac",
+                "label": (
+                    f"<b>{html.escape(r['flight'])}</b><br>{html.escape(r['desc'])}<br>"
+                    f"{int(r['alt_ft'] or 0)} ft"
+                ),
+            }
+        )
+    if iss.get("ok"):
+        center = (iss["lat"], iss["lon"])
+        zoom = 3
+    elif airborne:
+        center = (airborne[0]["lat"], airborne[0]["lon"])
+        zoom = 5
+    else:
+        cfg = REGIONS["it"]
+        center = (cfg["lat"], cfg["lon"])
+        zoom = 5
+    map_html = _leaflet(points, center, zoom) if points else "<p>Nessun punto da mettere in mappa in questo istante.</p>"
+
+    iss_line = "ISS non raggiungibile"
+    if iss.get("ok"):
+        iss_line = (
+            f"{iss['lat']:.2f}, {iss['lon']:.2f} · {(iss.get('alt_km') or 0):.0f} km · "
+            f"{html.escape(str(iss.get('place') or ''))}"
+        )
+    ac_line = "feed ADS-B assente"
+    if ac.get("ok"):
+        ac_line = f"{ac.get('airborne', 0)} in volo su {ac.get('total', 0)} tracciati in Italia"
+    ships_line = "AIS assente"
+    if ships.get("ok"):
+        ships_line = f"{ships.get('moving', 0)} in moto su {ships.get('total', 0)} nel Baltico"
+
+    stats = f"""
     <div class="grid">
-      <a class="card" href="/live/ac?r=it"><h2>✈️ Aerei</h2><p>ADS-B pubblico (adsb.fi). Italia, Mediterraneo, Europa, Manica, costa est USA, Giappone.</p></a>
-      <a class="card" href="/live/heli?r=it"><h2>🚁 Elicotteri</h2><p>Stesso feed, filtrato sulla categoria eli.</p></a>
-      <a class="card" href="/live/navi"><h2>⚓ Navi</h2><p>AIS aperto del Baltico finlandese (Digitraffic). Un mare vero, non un AIS mondiale.</p></a>
-      <a class="card" href="/live/iss"><h2>🛰️ ISS</h2><p>Latitudine, longitudine, altezza e velocità della stazione spaziale.</p></a>
+      <a class="card" href="/live/iss"><h2>🛰️ ISS</h2><p>{h(iss_line)}</p></a>
+      <a class="card" href="/live/ac?r=it"><h2>✈️ Aerei</h2><p>{h(ac_line)}</p></a>
+      <a class="card" href="/live/navi"><h2>⚓ Navi</h2><p>{h(ships_line)}</p></a>
     </div>
     """
+    cards = """
+    <div class="grid">
+      <a class="card" href="/live/ac?r=it"><h2>✈️ Aerei per zona</h2><p>Italia, Mediterraneo, Europa, Manica, costa est USA, Giappone.</p></a>
+      <a class="card" href="/live/heli?r=it"><h2>🚁 Elicotteri</h2><p>Stesso ADS-B, solo categoria eli.</p></a>
+      <a class="card" href="/live/navi"><h2>⚓ Elenco navi</h2><p>AIS aperto del Baltico finlandese, con destinazione e velocità.</p></a>
+      <a class="card" href="/live/iss"><h2>🛰️ Scheda ISS</h2><p>Quota, velocità, luce o ombra, mappa a tutta pagina.</p></a>
+    </div>
+    """
+    iss_map = ""
+    if iss.get("ok"):
+        iss_map = f'<p class="meta"><a class="chip" href="{h(iss["map"])}">Apri ISS su OpenStreetMap</a></p>'
     body = (
-        "<h1>📡 Live</h1>"
-        + telegramish(format_live_hub())
+        "<h1>📡 Posizioni live</h1>"
+        "<p class='lead'>Coordinate vere, adesso. Aerei da ADS-B pubblico, navi da AIS finlandese, "
+        "ISS da wheretheiss.at. Non è un radar militare.</p>"
         + _live_tabs("hub")
+        + stats
+        + map_html
+        + iss_map
         + cards
         + f'<p class="lead">{h(LIVE_NOTE)}</p>'
-        + '<p class="meta"><a class="chip" href="/live.json">Scarica JSON</a></p>'
+        + '<p class="meta"><a class="chip" href="/live">🔄 Aggiorna</a> '
+        '<a class="chip" href="/live.json">JSON</a></p>'
     )
-    return layout("Live", body)
+    return layout("Posizioni live", body, extra_head=LEAFLET_HEAD)
 
 
 def render_live_aircraft(region: str, *, heli: bool = False) -> str:
@@ -606,9 +682,10 @@ def live_payload(kind: str, region: str) -> dict:
         return fetch_ships()
     if kind == "iss":
         return fetch_iss()
-    ac = fetch_aircraft(region)
-    ships = fetch_ships()
-    iss = fetch_iss()
+    snap = fetch_hub(region)
+    ac = snap.get("ac") or {}
+    ships = snap.get("ships") or {}
+    iss = snap.get("iss") or {}
     if ac.get("ok"):
         ac = dict(ac)
         ac["rows"] = (ac.get("rows") or [])[:40]
