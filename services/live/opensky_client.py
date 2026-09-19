@@ -1,14 +1,16 @@
-"""Client HTTP OpenSky Network — OAuth2 client credentials, sessione riutilizzabile.
+"""Client HTTP OpenSky Network — Python API 1.4.0, senza libreria ufficiale.
 
-Documentazione: https://openskynetwork.github.io/opensky-api/rest.html
+Documentazione:
+  https://openskynetwork.github.io/opensky-api/python.html
+  https://openskynetwork.github.io/opensky-api/rest.html
 
-GET https://opensky-network.org/api/states/all
-  lamin, lomin, lamax, lomax
+Allineato a opensky_api.OpenSkyApi / TokenManager 1.4.0:
+  - OAuth2 client_credentials (TokenManager)
+  - sessione HTTP riutilizzata (urllib opener, equivalente a requests.Session)
+  - GET /states/all con lamin/lamax/lomin/lomax + extended=1
+  - rate client-side autenticato: 5s tra get_states
 
-Auth: POST client_credentials su
-  https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token
-
-Credenziali SOLO da env:
+Credenziali SOLO da env (mai credentials.json, mai anonymous):
   OPENSKY_CLIENT_ID
   OPENSKY_CLIENT_SECRET
 
@@ -26,7 +28,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
 
 log = logging.getLogger("warbot.opensky")
 
@@ -37,7 +38,10 @@ OPENSKY_TOKEN_URL = (
     "/protocol/openid-connect/token"
 )
 USER_AGENT = "WARBOT/1.0 (OPEN SKY; OAuth2; not bulk)"
+# Official TokenManager: refresh this many seconds before expiry.
 TOKEN_REFRESH_MARGIN = 30
+# Official OpenSkyApi._check_rate_limit(10, 5, get_states) — authenticated.
+AUTH_GET_STATES_MIN_S = 5.0
 MAX_429_WAIT = 5.0
 TIMEOUT_DEFAULT = 12
 
@@ -84,10 +88,12 @@ def http_request(
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
     timeout: int = TIMEOUT_S,
+    opener: urllib.request.OpenerDirector | None = None,
 ) -> tuple[int, bytes, dict[str, str]]:
     req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    open_fn = opener.open if opener is not None else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open_fn(req, timeout=timeout) as resp:
             return int(resp.status), resp.read(), {str(k): str(v) for k, v in resp.headers.items()}
     except urllib.error.HTTPError as exc:
         body = b""
@@ -106,34 +112,55 @@ def http_request(
         return -1, b"", {}
 
 
-class OpenSkyClient:
-    """Un'istanza per processo: token riusato fino a ~30 minuti."""
+def env_credentials() -> tuple[str, str] | None:
+    client_id = (os.getenv("OPENSKY_CLIENT_ID") or "").strip()
+    client_secret = (os.getenv("OPENSKY_CLIENT_SECRET") or "").strip()
+    if client_id and client_secret:
+        return client_id, client_secret
+    return None
 
-    def __init__(self) -> None:
+
+class TokenManager:
+    """OAuth2 client-credentials, come opensky_api.TokenManager 1.4.0.
+
+    Differenza voluta: le credenziali arrivano da OPENSKY_CLIENT_ID /
+    OPENSKY_CLIENT_SECRET, non da credentials.json.
+    """
+
+    def __init__(self, client_id: str, client_secret: str) -> None:
         self._lock = threading.Lock()
+        self._client_id = client_id
+        self._client_secret = client_secret
         self._token: str | None = None
         self._expires_at = 0.0
 
-    def credentials(self) -> tuple[str, str] | None:
-        client_id = (os.getenv("OPENSKY_CLIENT_ID") or "").strip()
-        client_secret = (os.getenv("OPENSKY_CLIENT_SECRET") or "").strip()
-        if client_id and client_secret:
-            return client_id, client_secret
-        return None
-
-    def configured(self) -> bool:
-        return self.credentials() is not None
-
-    def _fetch_access_token(self) -> str | None:
-        creds = self.credentials()
+    @classmethod
+    def from_env(cls) -> TokenManager | None:
+        creds = env_credentials()
         if not creds:
             return None
         client_id, client_secret = creds
+        return cls(client_id, client_secret)
+
+    def get_token(self, *, force: bool = False) -> str | None:
+        with self._lock:
+            if not force and self._token and time.time() < self._expires_at:
+                log.info("[OPENSKY] auth=reuse")
+                return self._token
+            return self._refresh()
+
+    def auth_headers(self, *, force: bool = False) -> dict[str, str] | None:
+        token = self.get_token(force=force)
+        if not token:
+            return None
+        return {"Authorization": f"Bearer {token}"}
+
+    def _refresh(self) -> str | None:
         body = urllib.parse.urlencode(
             {
                 "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
             }
         ).encode("utf-8")
         log.info("[OPENSKY] auth=token_fetch")
@@ -150,6 +177,8 @@ class OpenSkyClient:
         )
         if status != 200:
             log.info("[OPENSKY] auth=fail http=%s", status if status > 0 else "000")
+            self._token = None
+            self._expires_at = 0.0
             return None
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -162,16 +191,65 @@ class OpenSkyClient:
             return None
         expires_in = int(payload.get("expires_in") or 1800)
         self._token = token
-        self._expires_at = time.time() + max(60, expires_in - TOKEN_REFRESH_MARGIN)
+        self._expires_at = time.time() + max(1, expires_in - TOKEN_REFRESH_MARGIN)
         log.info("[OPENSKY] auth=ok expires_in=%s", expires_in)
         return token
 
-    def bearer_token(self, *, force: bool = False) -> str | None:
+
+def states_query(bbox: tuple[float, float, float, float]) -> dict[str, str]:
+    """Query REST per GET /states/all.
+
+    WARBOT/REST bbox: (lamin, lomin, lamax, lomax).
+
+    Official Python OpenSkyApi.get_states(bbox=(min_lat, max_lat, min_lon, max_lon))
+    mappa gli stessi quattro valori su lamin/lamax/lomin/lomax e manda extended=True.
+    """
+    lamin, lomin, lamax, lomax = bbox
+    return {
+        "lamin": f"{lamin:.6f}",
+        "lamax": f"{lamax:.6f}",
+        "lomin": f"{lomin:.6f}",
+        "lomax": f"{lomax:.6f}",
+        "extended": "1",
+    }
+
+
+class OpenSkyClient:
+    """Un'istanza per processo: TokenManager + opener, come OpenSkyApi 1.4.0.
+
+    Niente accesso anonimo: senza env il client non chiama l'API.
+    """
+
+    def __init__(self, token_manager: TokenManager | None = None) -> None:
+        self._lock = threading.Lock()
+        self._token_manager = token_manager
+        self._opener = urllib.request.build_opener()
+        self._last_states_at = 0.0
+
+    def credentials(self) -> tuple[str, str] | None:
+        return env_credentials()
+
+    def configured(self) -> bool:
+        return self.credentials() is not None
+
+    def token_manager(self) -> TokenManager | None:
         with self._lock:
-            if not force and self._token and time.time() < self._expires_at:
-                log.info("[OPENSKY] auth=reuse")
-                return self._token
-            return self._fetch_access_token()
+            if self._token_manager is not None:
+                return self._token_manager
+            tm = TokenManager.from_env()
+            if tm is not None:
+                self._token_manager = tm
+            return self._token_manager
+
+    def bearer_token(self, *, force: bool = False) -> str | None:
+        tm = self.token_manager()
+        if tm is None:
+            return None
+        try:
+            return tm.get_token(force=force)
+        except Exception:
+            log.info("[OPENSKY] auth=fail token_error")
+            return None
 
     def _headers(self, token: str) -> dict[str, str]:
         return {
@@ -181,16 +259,21 @@ class OpenSkyClient:
         }
 
     def states_url(self, bbox: tuple[float, float, float, float]) -> str:
-        lamin, lomin, lamax, lomax = bbox
-        query = urllib.parse.urlencode(
-            {
-                "lamin": f"{lamin:.6f}",
-                "lomin": f"{lomin:.6f}",
-                "lamax": f"{lamax:.6f}",
-                "lomax": f"{lomax:.6f}",
-            }
-        )
-        return f"{OPENSKY_STATES}?{query}"
+        return f"{OPENSKY_STATES}?{urllib.parse.urlencode(states_query(bbox))}"
+
+    def _respect_states_interval(self) -> None:
+        """Official authenticated get_states: minimo 5s tra una chiamata e la successiva."""
+        with self._lock:
+            if self._last_states_at <= 0:
+                return
+            wait = AUTH_GET_STATES_MIN_S - (time.time() - self._last_states_at)
+        if wait > 0:
+            log.info("[OPENSKY] rate wait=%.1fs", wait)
+            time.sleep(min(wait, AUTH_GET_STATES_MIN_S))
+
+    def _mark_states(self) -> None:
+        with self._lock:
+            self._last_states_at = time.time()
 
     def get_states(self, bbox: tuple[float, float, float, float]) -> tuple[int, bytes]:
         """GET /states/all autenticata. 401: un refresh. 429: Retry-After breve. 5xx: un retry."""
@@ -205,10 +288,13 @@ class OpenSkyClient:
         if not token:
             return 401, b""
 
+        self._respect_states_interval()
         url = self.states_url(bbox)
         log.info("[AIRCRAFT] request_start")
         t0 = time.time()
-        http, body, headers = http_request(url, headers=self._headers(token), timeout=TIMEOUT_S)
+        http, body, headers = http_request(
+            url, headers=self._headers(token), timeout=TIMEOUT_S, opener=self._opener
+        )
 
         if http == 401:
             # Un solo refresh del token, poi stop. 403: nessun retry.
@@ -217,7 +303,9 @@ class OpenSkyClient:
             except Exception:
                 token = None
             if token:
-                http, body, headers = http_request(url, headers=self._headers(token), timeout=TIMEOUT_S)
+                http, body, headers = http_request(
+                    url, headers=self._headers(token), timeout=TIMEOUT_S, opener=self._opener
+                )
         elif http == 403:
             log.info("[OPENSKY] auth=denied http=403")
         elif http == 429:
@@ -225,12 +313,19 @@ class OpenSkyClient:
             if wait is not None and 0 < wait <= MAX_429_WAIT:
                 log.info("[OPENSKY] rate wait=%.1fs", wait)
                 time.sleep(wait)
-                http, body, headers = http_request(url, headers=self._headers(token), timeout=TIMEOUT_S)
+                http, body, headers = http_request(
+                    url, headers=self._headers(token), timeout=TIMEOUT_S, opener=self._opener
+                )
             else:
                 log.info("[OPENSKY] rate no_wait retry_after=%s", wait)
         elif http in {500, 502, 503, 504}:
             log.info("[OPENSKY] retry http=%s", http)
-            http, body, headers = http_request(url, headers=self._headers(token), timeout=TIMEOUT_S)
+            http, body, headers = http_request(
+                url, headers=self._headers(token), timeout=TIMEOUT_S, opener=self._opener
+            )
+
+        if http == 200:
+            self._mark_states()
 
         elapsed_ms = int(round((time.time() - t0) * 1000))
         log.info("[AIRCRAFT] request_end")

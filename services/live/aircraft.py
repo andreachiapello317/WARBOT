@@ -3,14 +3,17 @@
 Documentazione ufficiale:
 https://openskynetwork.github.io/opensky-api/
 https://openskynetwork.github.io/opensky-api/rest.html
+https://openskynetwork.github.io/opensky-api/python.html
 
 Root REST: https://opensky-network.org/api
 Operazione: GET /states/all
-Bbox: lamin, lomin, lamax, lomax (WGS84, tutti e quattro)
+Bbox REST: lamin, lomin, lamax, lomax (WGS84).
+Python API 1.4.0 get_states(bbox=(min_lat, max_lat, min_lon, max_lon))
+mappa gli stessi quattro valori e manda sempre extended=True.
 
-Auth (REST 1.4.0): OAuth2 client credentials via OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET.
+Auth (REST / Python 1.4.0): OAuth2 client credentials via OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET.
 Senza quelle variabili OpenSky non parte: niente accesso anonimo.
-Basic username/password non è più accettato.
+Basic username/password non è più accettato. Niente credentials.json.
 
 OpenSky può bloccare IP di hyperscaler: da alcuni cloud la GET
 fallisce in handshake TLS. Non esiste un endpoint alternativo documentato.
@@ -46,6 +49,7 @@ IDX_VELOCITY = 9
 IDX_TRUE_TRACK = 10
 IDX_VERTICAL_RATE = 11
 IDX_GEO_ALTITUDE = 13
+# extended=1 (Python API get_states): category è all'indice 17. Non serve in Telegram.
 
 EARTH_RADIUS_KM = 6371.0
 KM_PER_DEG_LAT = 111.32

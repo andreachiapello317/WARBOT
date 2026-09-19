@@ -67,7 +67,7 @@ Callback: `city:ask`, `world:list`, `world:osm`, `world:opensky`, `osm:rail`, `o
 
 Overpass primary: `https://overpass.osm.ch/api/interpreter`. Failover: overpass-api.de, maps.mail.ru. Una risposta 200 vuota non ferma il failover. GET `/` e `/health` sul webhook rispondono 200 (Render non deve vedere 404).
 
-OpenSky: [documentazione ufficiale](https://openskynetwork.github.io/opensky-api/) — `GET /api/states/all` con bbox.
+OpenSky: [REST](https://openskynetwork.github.io/opensky-api/rest.html) e [Python API 1.4.0](https://openskynetwork.github.io/opensky-api/python.html) — `GET /api/states/all` con bbox (`lamin`/`lamax`/`lomin`/`lomax`) e `extended=1`. Token OAuth2 riusato (TokenManager), sessione HTTP persistente, minimo 5s tra `get_states` autenticati. Niente accesso anonimo.
 
 Su Render imposta **obbligatorie**:
 

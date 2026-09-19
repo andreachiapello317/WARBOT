@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import math
+import time
 import unittest
 from unittest.mock import patch
 
@@ -389,6 +390,11 @@ class ClientMockTest(unittest.TestCase):
         def fake_http(url: str, **kwargs):
             self.assertIn("states/all", url)
             self.assertIn("lamin=", url)
+            self.assertIn("lamax=", url)
+            self.assertIn("lomin=", url)
+            self.assertIn("lomax=", url)
+            self.assertIn("extended=1", url)
+            self.assertIsNotNone(kwargs.get("opener"))
             return calls.pop(0)
 
         with patch("services.live.opensky_client.http_request", side_effect=fake_http):
@@ -444,19 +450,55 @@ class ClientMockTest(unittest.TestCase):
             self._token.start()
 
     def test_token_reuse(self) -> None:
-        from services.live.opensky_client import OpenSkyClient
+        from services.live.opensky_client import OpenSkyClient, TokenManager
 
         self._token.stop()
         try:
-            client = OpenSkyClient()
-            client._token = "cached-token"
-            client._expires_at = 9e12
-            with patch.object(client, "_fetch_access_token") as fetch:
+            tm = TokenManager("id", "secret")
+            tm._token = "cached-token"
+            tm._expires_at = time.time() + 1e6
+            client = OpenSkyClient(token_manager=tm)
+            with patch.object(tm, "_refresh") as fetch:
                 self.assertEqual(client.bearer_token(), "cached-token")
                 self.assertEqual(client.bearer_token(), "cached-token")
                 fetch.assert_not_called()
         finally:
             self._token.start()
+
+    def test_authenticated_rate_limit_5s(self) -> None:
+        from services.live.opensky_client import get_opensky_client
+
+        payload = json.dumps({"time": 1, "states": [_state("abcabc", 45.47, 9.20)]}).encode()
+        client = get_opensky_client()
+        client._last_states_at = time.time()
+        with (
+            patch("services.live.opensky_client.time.sleep") as sleep,
+            patch("services.live.opensky_client.http_request", return_value=(200, payload, {})),
+        ):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        self.assertTrue(bundle["ok"])
+        sleep.assert_called()
+        waited = sleep.call_args[0][0]
+        self.assertGreater(waited, 0)
+        self.assertLessEqual(waited, 5.0)
+
+    def test_python_bbox_maps_to_rest_params(self) -> None:
+        from services.live.opensky_client import OpenSkyClient, states_query
+
+        # Official Python: (min_lat, max_lat, min_lon, max_lon) → lamin/lamax/lomin/lomax.
+        # WARBOT stores REST (lamin, lomin, lamax, lomax); same four numbers.
+        min_lat, max_lat, min_lon, max_lon = 45.8389, 47.8229, 5.9962, 10.5226
+        rest_bbox = (min_lat, min_lon, max_lat, max_lon)
+        query = states_query(rest_bbox)
+        self.assertEqual(query["lamin"], "45.838900")
+        self.assertEqual(query["lamax"], "47.822900")
+        self.assertEqual(query["lomin"], "5.996200")
+        self.assertEqual(query["lomax"], "10.522600")
+        self.assertEqual(query["extended"], "1")
+        url = OpenSkyClient().states_url(rest_bbox)
+        self.assertIn("states/all", url)
+        self.assertIn("extended=1", url)
+        self.assertNotIn("credentials.json", url)
 
 
 class TokenFetchTest(unittest.TestCase):
@@ -509,6 +551,24 @@ class TokenFetchTest(unittest.TestCase):
         self.assertNotIn("sec-y", joined)
         self.assertNotIn("id-x", joined)
         self.assertNotIn("abc", joined)
+
+    def test_token_manager_from_env_not_file(self) -> None:
+        from services.live.opensky_client import TokenManager
+
+        with patch("builtins.open") as mocked_open:
+            tm = TokenManager.from_env()
+        self.assertIsNotNone(tm)
+        mocked_open.assert_not_called()
+
+    def test_token_manager_missing_env(self) -> None:
+        from services.live.opensky_client import TokenManager
+
+        with patch.dict(
+            os.environ,
+            {"OPENSKY_CLIENT_ID": "", "OPENSKY_CLIENT_SECRET": ""},
+            clear=False,
+        ):
+            self.assertIsNone(TokenManager.from_env())
 
     def test_failed_token_does_not_call_states_anonymously(self) -> None:
         urls: list[str] = []

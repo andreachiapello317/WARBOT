@@ -30,12 +30,20 @@ NON usare `OPENSKY_USERNAME` / `OPENSKY_PASSWORD`: erano lo schema Basic Auth pr
 
 Se l'autenticazione OpenSky ufficiale cambia, adattarsi alla documentazione ufficiale:
 https://openskynetwork.github.io/opensky-api/rest.html
+https://openskynetwork.github.io/opensky-api/python.html
+
+Python API 1.4.0 (`opensky_api.OpenSkyApi` / `TokenManager`): OAuth2 client credentials,
+sessione HTTP riutilizzata, `get_states` con `extended=True`, rate autenticato 5s.
+WARBOT segue quel contratto senza includere la libreria ufficiale (quella permette
+anonymous e `credentials.json`; qui è vietato).
 
 Il client OpenSky deve:
 
-- autenticarsi correttamente con OAuth2 client credentials
-- riutilizzare la sessione/token quando previsto
+- autenticarsi correttamente con OAuth2 client credentials (`TokenManager` da env)
+- riutilizzare la sessione HTTP e il token quando previsto
 - non autenticarsi nuovamente per ogni richiesta
+- chiamare `GET /states/all` con bbox e `extended=1` (come `get_states` ufficiale)
+- rispettare il rate autenticato ufficiale: minimo 5s tra `get_states`
 - gestire HTTP 401/403 (niente retry infinito)
 - gestire HTTP 429 (rispettare Retry-After se presente e breve)
 - gestire HTTP 5xx (massimo un retry controllato)
