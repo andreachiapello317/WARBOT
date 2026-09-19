@@ -1,4 +1,4 @@
-"""Query Overpass su OpenStreetMap. Nessun radar, solo mappa pubblica."""
+"""OSM WORLD: Overpass per categoria, dopo il geocoder. Nessuna query gigante sulla città."""
 
 from __future__ import annotations
 
@@ -8,112 +8,219 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Callable
 
 from services.live.feeds import clip, e, osm_url
 
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
-USER_AGENT = "WARBOT/1.0 (live OSM; Overpass)"
+USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
 DEFAULT_TIMEOUT = 45
 QUERY_TIMEOUT = 25
 OVERPASS_RETRIES = 3
-OSM_NOTE = "Punti da OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
+LIST_LIMIT = 12
+OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
-# south, west, north, east — Overpass (lat_min, lon_min, lat_max, lon_max)
 BBox = tuple[float, float, float, float]
+_CACHE: dict[str, tuple[float, Any]] = {}
 
-PLACES: dict[str, dict[str, Any]] = {
-    "milano": {
-        "id": "milano",
-        "title": "Milano",
-        "bbox": (45.3, 9.0, 45.6, 9.4),
-    },
-}
+AcceptFn = Callable[[dict[str, Any]], bool]
+RankFn = Callable[[dict[str, Any]], tuple]
 
+
+def _tag(tags: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = tags.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _yes(tags: dict[str, Any], *keys: str) -> bool:
+    return any(str(tags.get(k) or "").lower() in {"yes", "1", "true"} for k in keys)
+
+
+def accept_aerodrome(tags: dict[str, Any]) -> bool:
+    if tags.get("aeroway") != "aerodrome":
+        return False
+    kind = str(tags.get("aerodrome") or "").lower()
+    return kind not in {"heliport"}
+
+
+def rank_aerodrome(row: dict[str, Any]) -> tuple:
+    return (
+        0 if row.get("iata") else 1,
+        0 if row.get("icao") else 1,
+        0 if row.get("wikidata") else 1,
+        row["name"].lower(),
+    )
+
+
+def accept_rail(tags: dict[str, Any]) -> bool:
+    railway = str(tags.get("railway") or "")
+    station = str(tags.get("station") or "")
+    public = str(tags.get("public_transport") or "")
+    if railway in {"halt", "tram_stop", "subway_entrance", "platform", "stop", "halt_position"}:
+        return False
+    if public in {"stop_position", "platform"}:
+        return False
+    if tags.get("highway") == "bus_stop":
+        return False
+    if tags.get("amenity") == "bus_station" and not (_yes(tags, "train") or railway == "station"):
+        return False
+    if railway == "platform" or tags.get("railway") == "subway_entrance":
+        return False
+    subway_only = station == "subway" or (_yes(tags, "subway") and not _yes(tags, "train"))
+    light = station in {"light_rail", "tram"} or (_yes(tags, "tram") and not _yes(tags, "train"))
+    if subway_only or light:
+        return False
+    if _yes(tags, "bus") and not _yes(tags, "train") and railway != "station":
+        return False
+    train_station = _yes(tags, "train") or tags.get("building") == "train_station" or bool(_tag(tags, "uic_ref"))
+    if train_station:
+        return True
+    return railway == "station" and station not in {"subway", "light_rail", "monorail", "tram"} and not _yes(tags, "subway")
+
+
+def rank_rail(row: dict[str, Any]) -> tuple:
+    tags = row.get("tags") or {}
+    return (
+        0 if _tag(tags, "uic_ref") else 1,
+        0 if _yes(tags, "train") else 1,
+        0 if tags.get("building") == "train_station" else 1,
+        0 if row.get("wikidata") or row.get("wikipedia") else 1,
+        row["name"].lower(),
+    )
+
+
+def accept_named(tags: dict[str, Any]) -> bool:
+    return bool(_tag(tags, "name:it", "name", "official_name"))
+
+
+def rank_wiki(row: dict[str, Any]) -> tuple:
+    return (
+        0 if row.get("wikidata") else 1,
+        0 if row.get("wikipedia") else 1,
+        0 if row.get("website") else 1,
+        row["name"].lower(),
+    )
+
+
+# Filtri Overpass: una categoria per tap. south,west,north,east nel QL.
 CATEGORIES: dict[str, dict[str, Any]] = {
-    "aerodrome": {
-        "id": "aerodrome",
+    "aero": {
+        "id": "aero",
         "emoji": "✈️",
         "title": "Aeroporti",
         "filters": ('nwr["aeroway"="aerodrome"]',),
+        "accept": accept_aerodrome,
+        "rank": rank_aerodrome,
     },
-    "railway_station": {
-        "id": "railway_station",
-        "emoji": "🚉",
+    "rail": {
+        "id": "rail",
+        "emoji": "🚆",
         "title": "Stazioni ferroviarie",
-        "filters": ('nwr["railway"="station"]',),
+        "filters": (
+            'nwr["railway"="station"]',
+            'nwr["building"="train_station"]',
+        ),
+        "accept": accept_rail,
+        "rank": rank_rail,
     },
-    "subway_station": {
-        "id": "subway_station",
-        "emoji": "🚇",
-        "title": "Stazioni metro",
-        "filters": ('nwr["station"="subway"]',),
-    },
-    "hospital": {
-        "id": "hospital",
+    "hosp": {
+        "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
         "filters": ('nwr["amenity"="hospital"]',),
+        "accept": accept_named,
+        "rank": rank_wiki,
+    },
+    "port": {
+        "id": "port",
+        "emoji": "⚓",
+        "title": "Porti",
+        "filters": (
+            'nwr["landuse"="harbour"]',
+            'nwr["industrial"="port"]',
+            'nwr["harbour"="yes"]',
+        ),
+        "accept": lambda tags: True,
+        "rank": rank_wiki,
+    },
+    "stad": {
+        "id": "stad",
+        "emoji": "🏟️",
+        "title": "Stadi",
+        "filters": ('nwr["leisure"="stadium"]',),
+        "accept": accept_named,
+        "rank": rank_wiki,
+    },
+    "land": {
+        "id": "land",
+        "emoji": "🏛️",
+        "title": "Luoghi principali",
+        "filters": (
+            'nwr["tourism"="attraction"]["wikidata"]',
+            'nwr["historic"="monument"]',
+            'nwr["historic"="castle"]',
+            'nwr["historic"="palace"]',
+            'nwr["tourism"="museum"]',
+            'nwr["amenity"="townhall"]',
+            'nwr["building"="cathedral"]',
+        ),
+        "accept": accept_named,
+        "rank": rank_wiki,
+    },
+    "mall": {
+        "id": "mall",
+        "emoji": "🛍️",
+        "title": "Centri commerciali",
+        "filters": (
+            'nwr["shop"="mall"]',
+            'nwr["shop"="department_store"]',
+        ),
+        "accept": accept_named,
+        "rank": rank_wiki,
     },
 }
 
-# Gruppi Telegram: stazioni = ferrovia + metro
-GROUPS: dict[str, dict[str, Any]] = {
-    "aerodrome": {
-        "id": "aerodrome",
-        "emoji": "✈️",
-        "title": "Aeroporti",
-        "categories": ("aerodrome",),
-    },
-    "station": {
-        "id": "station",
-        "emoji": "🚉",
-        "title": "Stazioni",
-        "categories": ("railway_station", "subway_station"),
-    },
-    "hospital": {
-        "id": "hospital",
-        "emoji": "🏥",
-        "title": "Ospedali",
-        "categories": ("hospital",),
-    },
-}
+WORLD_CATEGORIES = ("aero", "rail", "hosp", "port", "stad", "land", "mall")
 
 _ALIASES = {
-    "aerodrome": "aerodrome",
-    "aeroporti": "aerodrome",
-    "aeroporto": "aerodrome",
-    "airport": "aerodrome",
-    "aero": "aerodrome",
-    "railway_station": "railway_station",
-    "railway": "railway_station",
-    "rail": "railway_station",
-    "subway_station": "subway_station",
-    "subway": "subway_station",
-    "metro": "subway_station",
-    "hospital": "hospital",
-    "ospedali": "hospital",
-    "ospedale": "hospital",
-    "hosp": "hospital",
-    "station": "station",
-    "stazioni": "station",
-    "stazione": "station",
+    "aero": "aero",
+    "aerodrome": "aero",
+    "aeroporti": "aero",
+    "aeroporto": "aero",
+    "airport": "aero",
+    "rail": "rail",
+    "railway": "rail",
+    "railway_station": "rail",
+    "station": "rail",
+    "stazioni": "rail",
+    "stazione": "rail",
+    "hosp": "hosp",
+    "hospital": "hosp",
+    "ospedali": "hosp",
+    "ospedale": "hosp",
+    "port": "port",
+    "porti": "port",
+    "porto": "port",
+    "harbour": "port",
+    "stad": "stad",
+    "stadi": "stad",
+    "stadio": "stad",
+    "stadium": "stad",
+    "land": "land",
+    "luoghi": "land",
+    "monumenti": "land",
+    "mall": "mall",
+    "centri": "mall",
+    "shopping": "mall",
 }
-
-_CACHE: dict[str, tuple[float, Any]] = {}
-
-
-def resolve_place(raw: str | None) -> dict[str, Any] | None:
-    key = (raw or "").strip().lower()
-    aliases = {"milan": "milano", "mi": "milano"}
-    key = aliases.get(key, key)
-    return PLACES.get(key)
 
 
 def resolve_category(raw: str | None) -> str | None:
     key = (raw or "").strip().lower().replace("-", "_").replace(" ", "_")
-    return _ALIASES.get(key)
+    return _ALIASES.get(key) if key in _ALIASES else (key if key in CATEGORIES else None)
 
 
 def parse_bbox(bbox: BBox | str | tuple[float, ...]) -> BBox:
@@ -148,7 +255,7 @@ def _cached(key: str, ttl: float, loader):
 
 
 def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Esegue una query Overpass in POST application/x-www-form-urlencoded."""
+    """POST application/x-www-form-urlencoded, parametro data=."""
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
     last_error = "Overpass non ha risposto"
     last_detail = ""
@@ -203,27 +310,23 @@ def _element_coords(el: dict[str, Any]) -> tuple[float, float] | None:
     return None
 
 
-def _tag(tags: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = tags.get(key)
-        if value:
-            return str(value).strip()
-    return ""
+def wikipedia_url(tag: str) -> str:
+    if not tag:
+        return ""
+    if ":" in tag:
+        lang, title = tag.split(":", 1)
+        slug = urllib.parse.quote(title.replace(" ", "_"))
+        return f"https://{lang}.wikipedia.org/wiki/{slug}"
+    return f"https://en.wikipedia.org/wiki/{urllib.parse.quote(tag.replace(' ', '_'))}"
 
 
-def _classify(tags: dict[str, Any]) -> str:
-    if tags.get("aeroway") == "aerodrome":
-        return "aerodrome"
-    if tags.get("amenity") == "hospital":
-        return "hospital"
-    if tags.get("station") == "subway" or (tags.get("subway") == "yes" and tags.get("railway") == "station"):
-        return "subway_station"
-    if tags.get("railway") == "station":
-        return "railway_station"
-    return ""
+def wikidata_url(qid: str) -> str:
+    if not qid:
+        return ""
+    return f"https://www.wikidata.org/wiki/{urllib.parse.quote(qid)}"
 
 
-def normalize_element(el: dict[str, Any], *, category: str = "") -> dict[str, Any] | None:
+def normalize_element(el: dict[str, Any], *, category: str) -> dict[str, Any] | None:
     coords = _element_coords(el)
     if coords is None:
         return None
@@ -231,10 +334,14 @@ def normalize_element(el: dict[str, Any], *, category: str = "") -> dict[str, An
     tags = el.get("tags") or {}
     if not isinstance(tags, dict):
         tags = {}
-    cat = _classify(tags) or category
-    if not cat:
+    meta = CATEGORIES.get(category) or {}
+    accept: AcceptFn = meta.get("accept") or (lambda _t: True)
+    if not accept(tags):
         return None
-    name = _tag(tags, "name:it", "name", "official_name") or "senza nome"
+    name = _tag(tags, "name:it", "name", "official_name", "alt_name") or "senza nome"
+    wiki = _tag(tags, "wikipedia")
+    qid = _tag(tags, "wikidata")
+    site = _tag(tags, "website", "contact:website", "url")
     return {
         "id": f"{el.get('type')}/{el.get('id')}",
         "osm_type": str(el.get("type") or ""),
@@ -242,15 +349,21 @@ def normalize_element(el: dict[str, Any], *, category: str = "") -> dict[str, An
         "name": name,
         "lat": lat,
         "lon": lon,
-        "type": cat,
-        "category": cat,
+        "type": category,
+        "category": category,
         "operator": _tag(tags, "operator"),
-        "website": _tag(tags, "website", "contact:website"),
-        "wikipedia": _tag(tags, "wikipedia"),
-        "wikidata": _tag(tags, "wikidata"),
+        "website": site,
+        "wikipedia": wiki,
+        "wikipedia_url": wikipedia_url(wiki),
+        "wikidata": qid,
+        "wikidata_url": wikidata_url(qid),
         "iata": _tag(tags, "iata"),
         "icao": _tag(tags, "icao"),
-        "map": osm_url(lat, lon, 14),
+        "uic": _tag(tags, "uic_ref"),
+        "building": _tag(tags, "building"),
+        "train": _tag(tags, "train"),
+        "map": osm_url(lat, lon, 15),
+        "tags": tags,
     }
 
 
@@ -260,30 +373,18 @@ def _build_query(bbox: BBox, filters: tuple[str, ...], *, timeout: int = QUERY_T
     return f"[out:json][timeout:{timeout}];\n(\n  {union}\n);\nout center;"
 
 
-def _filters_for(category: str) -> tuple[str, ...] | None:
-    if category in GROUPS:
-        filters: list[str] = []
-        for cat in GROUPS[category]["categories"]:
-            filters.extend(CATEGORIES[cat]["filters"])
-        return tuple(filters)
-    meta = CATEGORIES.get(category)
-    if not meta:
-        return None
-    return tuple(meta["filters"])
-
-
 def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Cerca una categoria OSM in un bounding box (south, west, north, east)."""
-    cat = resolve_category(category) or (category if category in CATEGORIES or category in GROUPS else "")
+    """Una sola categoria Overpass nel bounding box (south, west, north, east)."""
+    cat = resolve_category(category)
     if not cat:
         return {"ok": False, "error": f"categoria sconosciuta: {category}", "rows": [], "total": 0}
     try:
         box = parse_bbox(bbox)
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc), "rows": [], "total": 0}
-    filters = _filters_for(cat)
-    if not filters:
-        return {"ok": False, "error": f"categoria sconosciuta: {category}", "rows": [], "total": 0}
+    meta = CATEGORIES[cat]
+    filters = tuple(meta["filters"])
+    rank: RankFn = meta.get("rank") or (lambda r: (r["name"].lower(),))
 
     def load() -> dict[str, Any]:
         query = _build_query(box, filters)
@@ -299,26 +400,39 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
                 "total": 0,
                 "query": query,
             }
-        wanted = set(GROUPS[cat]["categories"]) if cat in GROUPS else {cat}
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
         for el in payload.get("elements") or []:
             if not isinstance(el, dict):
                 continue
-            item = normalize_element(el, category=cat if cat in CATEGORIES else "")
-            if not item or item["category"] not in wanted:
-                continue
-            if item["id"] in seen:
+            item = normalize_element(el, category=cat)
+            if not item or item["id"] in seen:
                 continue
             seen.add(item["id"])
             rows.append(item)
-        rows.sort(key=lambda r: (r["name"].lower(), r["lat"], r["lon"]))
-        label = GROUPS[cat] if cat in GROUPS else CATEGORIES[cat]
+        merged: dict[tuple, dict[str, Any]] = {}
+        for item in rows:
+            key = (item["name"].lower(), round(item["lat"], 3), round(item["lon"], 3))
+            prev = merged.get(key)
+            if prev is None:
+                merged[key] = item
+                continue
+            score = lambda r: (
+                bool(r.get("uic")),
+                bool(r.get("iata")),
+                bool(r.get("wikidata")),
+                bool(r.get("website")),
+                r.get("osm_type") == "way",
+            )
+            if score(item) > score(prev):
+                merged[key] = item
+        rows = list(merged.values())
+        rows.sort(key=rank)
         return {
             "ok": True,
             "category": cat,
-            "title": label["title"],
-            "emoji": label["emoji"],
+            "title": meta["title"],
+            "emoji": meta["emoji"],
             "bbox": box,
             "rows": rows,
             "total": len(rows),
@@ -327,127 +441,142 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
             "query": query,
         }
 
-    return _cached(f"osm:{box}:{cat}", 90, load)
+    return _cached(f"osm:{box}:{cat}", 180, load)
 
 
-def search_place(place: str, category: str | None = None, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    meta = resolve_place(place)
-    if not meta:
-        return {"ok": False, "error": f"luogo OSM non in mappa: {place}", "rows": [], "groups": {}}
-    if category:
-        bundle = search(meta["bbox"], category, timeout=timeout)
-        bundle["place"] = meta["id"]
-        bundle["place_title"] = meta["title"]
-        return bundle
+def format_osm_world() -> str:
+    return (
+        "🌍 <b>OSM WORLD</b>\n\n"
+        "🔎 Scrivi una città, paese o località:\n\n"
+        "<i>Tokyo</i>\n"
+        "<i>Parigi</i>\n"
+        "<i>New York</i>\n"
+        "<i>Milano</i>\n"
+        "<i>Buenos Aires</i>\n"
+        "<i>Singapore</i>\n\n"
+        "Poi scegli una categoria. Overpass parte solo a quel punto.\n\n"
+        f"<i>{OSM_NOTE}</i>"
+    )
 
-    groups: dict[str, list[dict[str, Any]]] = {}
-    errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futs = {gkey: pool.submit(search, meta["bbox"], gkey, timeout=timeout) for gkey in GROUPS}
-        bundles = {gkey: fut.result() for gkey, fut in futs.items()}
-    for gkey, bundle in bundles.items():
-        if bundle.get("ok"):
-            groups[gkey] = list(bundle.get("rows") or [])
-        else:
-            groups[gkey] = []
-            errors.append(f"{gkey}: {bundle.get('error') or 'errore'}")
-    total = sum(len(rows) for rows in groups.values())
-    if total == 0 and errors:
-        return {
-            "ok": False,
-            "error": "; ".join(errors),
-            "place": meta["id"],
-            "place_title": meta["title"],
-            "bbox": meta["bbox"],
-            "groups": groups,
-            "total": 0,
-        }
-    return {
-        "ok": True,
-        "place": meta["id"],
-        "place_title": meta["title"],
-        "bbox": meta["bbox"],
-        "groups": groups,
-        "total": total,
-        "source": "OpenStreetMap / Overpass",
-        "ts": time.time(),
-        "partial": bool(errors),
-        "errors": errors,
-    }
+
+def format_osm_hits(query: str, hits: list[dict[str, Any]]) -> str:
+    lines = [
+        "🌍 <b>OSM WORLD</b>",
+        f"🔎 {e(query)} — più di un risultato. Tocca il luogo.",
+        "",
+    ]
+    for i, hit in enumerate(hits[:5], 1):
+        lines.append(f"{i}. <b>{e(hit['display'])}</b>")
+        lines.append(f"{hit['lat']:.3f}, {hit['lon']:.3f}")
+    lines.append("")
+    lines.append(f"<i>{OSM_NOTE}</i>")
+    return clip("\n".join(lines))
+
+
+def format_osm_place(place: dict[str, Any]) -> str:
+    note = place.get("bbox_note") or ""
+    lines = [
+        "🌍 <b>OSM WORLD</b>",
+        f"📍 <b>{e(place.get('display') or place.get('name'))}</b>",
+        f"{place['lat']:.4f}, {place['lon']:.4f}",
+        "",
+        "Tocca una categoria. Non scarico tutta la città in un colpo.",
+    ]
+    if note:
+        lines.append("")
+        lines.append(f"<i>{e(note)}</i>")
+    lines += ["", f"<i>{OSM_NOTE}</i>"]
+    return clip("\n".join(lines))
 
 
 def _row_line(row: dict[str, Any]) -> str:
     extra: list[str] = []
     if row.get("iata") or row.get("icao"):
         extra.append(" / ".join(p for p in (row.get("iata"), row.get("icao")) if p))
+    if row.get("uic"):
+        extra.append(f"UIC {row['uic']}")
     if row.get("operator"):
         extra.append(row["operator"])
     codes = f" · {e(' · '.join(extra))}" if extra else ""
-    return (
-        f"• <b>{e(row['name'])}</b>{codes}\n"
-        f"{row['lat']:.4f}, {row['lon']:.4f} · <a href=\"{row['map']}\">mappa</a>"
-    )
+    return f"• <b>{e(row['name'])}</b>{codes}"
 
 
-def format_osm_place(bundle: dict[str, Any], *, per_group: int = 5) -> str:
+def format_osm_category(bundle: dict[str, Any], place: dict[str, Any] | None = None, *, limit: int = LIST_LIMIT) -> str:
     if not bundle.get("ok"):
         return (
-            "🗺️ <b>LIVE OSM</b>\n\n"
+            "🌍 <b>OSM WORLD</b>\n\n"
             "Overpass non ha risposto.\n"
             f"<i>{e(bundle.get('error') or 'timeout')}</i>"
         )
-    south, west, north, east = bundle["bbox"]
+    where = ""
+    if place:
+        where = f" · {e(place.get('display') or place.get('name'))}"
     lines = [
-        f"🗺️ <b>LIVE OSM · {e(bundle.get('place_title') or bundle.get('place'))}</b>",
-        f"bbox {south},{west},{north},{east}",
-        f"{bundle.get('total', 0)} punti · OpenStreetMap",
-        "",
-    ]
-    for key, group in GROUPS.items():
-        rows = (bundle.get("groups") or {}).get(key) or []
-        lines.append(f"{group['emoji']} <b>{group['title']}</b> ({len(rows)})")
-        if not rows:
-            lines.append("nessun punto in questo riquadro")
-        for row in rows[:per_group]:
-            lines.append(_row_line(row))
-        if len(rows) > per_group:
-            lines.append(f"… +{len(rows) - per_group}")
-        lines.append("")
-    lines.append(f"<i>{OSM_NOTE}</i>")
-    return clip("\n".join(lines))
-
-
-def format_osm_category(bundle: dict[str, Any], *, limit: int = 12) -> str:
-    if not bundle.get("ok"):
-        return (
-            "🗺️ <b>LIVE OSM</b>\n\n"
-            "Overpass non ha risposto.\n"
-            f"<i>{e(bundle.get('error') or 'timeout')}</i>"
-        )
-    title = bundle.get("place_title") or ""
-    head = f"{bundle.get('emoji', '🗺️')} <b>{e(bundle.get('title'))}</b>"
-    if title:
-        head += f" · {e(title)}"
-    lines = [
-        head,
-        f"{bundle.get('total', 0)} punti · OpenStreetMap",
+        f"{bundle.get('emoji', '🗺️')} <b>{e(bundle.get('title'))}</b>{where}",
+        f"{bundle.get('total', 0)} elementi · tocca una scheda",
         "",
     ]
     rows = bundle.get("rows") or []
     if not rows:
-        lines.append("Nessun punto in questo riquadro.")
+        lines.append("Niente in questa categoria nel riquadro.")
     for row in rows[:limit]:
         lines.append(_row_line(row))
-        extra = []
-        if row.get("website"):
-            extra.append(f'<a href="{html.escape(row["website"], quote=True)}">sito</a>')
-        if row.get("wikidata"):
-            extra.append(e(row["wikidata"]))
-        if extra:
-            lines.append(" · ".join(extra))
-        lines.append("")
     if len(rows) > limit:
         lines.append(f"… +{len(rows) - limit}")
-        lines.append("")
-    lines.append(f"<i>{OSM_NOTE}</i>")
+    lines += ["", f"<i>{OSM_NOTE}</i>"]
     return clip("\n".join(lines))
+
+
+def format_osm_item(row: dict[str, Any], place: dict[str, Any] | None = None) -> str:
+    cat = CATEGORIES.get(row.get("category") or "", {})
+    head = f"{cat.get('emoji', '📍')} <b>{e(row['name'])}</b>"
+    lines = ["🌍 <b>OSM WORLD</b>", head]
+    if place:
+        lines.append(f"📍 {e(place.get('display') or place.get('name'))}")
+    lines.append(f"{row['lat']:.5f}, {row['lon']:.5f}")
+    bits = []
+    if row.get("iata"):
+        bits.append(f"IATA {e(row['iata'])}")
+    if row.get("icao"):
+        bits.append(f"ICAO {e(row['icao'])}")
+    if row.get("uic"):
+        bits.append(f"UIC {e(row['uic'])}")
+    if row.get("operator"):
+        bits.append(e(row["operator"]))
+    if row.get("building"):
+        bits.append(e(row["building"]))
+    if row.get("train") == "yes":
+        bits.append("train=yes")
+    if bits:
+        lines.append(" · ".join(bits))
+    if row.get("website"):
+        lines.append(f'<a href="{html.escape(row["website"], quote=True)}">sito</a>')
+    if row.get("wikipedia_url"):
+        lines.append(f'<a href="{html.escape(row["wikipedia_url"], quote=True)}">Wikipedia</a> · {e(row["wikipedia"])}')
+    if row.get("wikidata_url"):
+        lines.append(f'<a href="{html.escape(row["wikidata_url"], quote=True)}">Wikidata {e(row["wikidata"])}</a>')
+    lines.append(f'<a href="{row["map"]}">mappa OpenStreetMap</a>')
+    lines += ["", f"<i>{OSM_NOTE}</i>"]
+    return clip("\n".join(lines))
+
+
+def format_osm_map(place: dict[str, Any]) -> str:
+    lat, lon = place["lat"], place["lon"]
+    south, west, north, east = place["bbox"]
+    overview = f"https://www.openstreetmap.org/#map=12/{lat:.4f}/{lon:.4f}"
+    marker = osm_url(lat, lon, 12)
+    return clip(
+        "\n".join(
+            [
+                "🗺️ <b>MAPPA</b>",
+                f"📍 <b>{e(place.get('display') or place.get('name'))}</b>",
+                f"{lat:.4f}, {lon:.4f}",
+                f"bbox {south:.3f},{west:.3f},{north:.3f},{east:.3f}",
+                f'<a href="{overview}">apri la zona</a>',
+                f'<a href="{marker}">segnaposto sul centro</a>',
+                "",
+                "Le categorie restano liste e schede. La mappa è il foglio OSM del luogo.",
+                f"<i>{OSM_NOTE}</i>",
+            ]
+        )
+    )

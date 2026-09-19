@@ -39,13 +39,16 @@ from services.live import (
     format_live_hub,
     format_ships,
 )
+from services.live.geocode import geocode
 from services.live.osm import (
-    PLACES,
     format_osm_category,
+    format_osm_hits,
+    format_osm_item,
+    format_osm_map,
     format_osm_place,
+    format_osm_world,
     resolve_category,
-    resolve_place,
-    search_place,
+    search as osm_search_bbox,
 )
 from ui.keyboards import (
     back_home_keyboard,
@@ -53,7 +56,10 @@ from ui.keyboards import (
     live_misc_keyboard,
     live_region_keyboard,
     osm_category_keyboard,
+    osm_hits_keyboard,
+    osm_item_keyboard,
     osm_place_keyboard,
+    osm_world_keyboard,
 )
 from ui.texts import help_text
 
@@ -66,6 +72,11 @@ EMPTY_KEYBOARD = InlineKeyboardMarkup([])
 
 NAV_SKIP_EXACT = frozenset({"nav:back", "home:menu"})
 NAV_HOME_TOKENS = frozenset({"home:menu", "home:live"})
+OSM_WAIT_KEY = "osm_wait_text"
+OSM_PLACE_KEY = "osm_place"
+OSM_HITS_KEY = "osm_hits"
+OSM_ROWS_KEY = "osm_rows"
+OSM_CAT_KEY = "osm_cat"
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -326,9 +337,8 @@ async def open_live(update: Update, context: ContextTypes.DEFAULT_TYPE, action: 
     if action == "iss":
         await show_live_iss(update, context)
         return
-    if action == "osm":
-        place, _, cat = extra.partition(":")
-        await show_osm(update, context, place or "milano", cat or None)
+    if action in {"osm", "ow"}:
+        await open_ow(update, context, extra)
         return
     await show_live_hub(update, context)
 
@@ -364,73 +374,198 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await delete_user_command(update)
 
 
-async def show_osm(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    place: str,
-    category: str | None = None,
-) -> None:
-    meta = resolve_place(place)
-    if meta is None:
-        known = ", ".join(sorted(PLACES))
-        await reply_html(
-            update,
-            context,
-            f"🗺️ <b>LIVE OSM</b>\n\nLuogo non in mappa. Ora: {known}.\nEsempio: /live milano",
-            reply_markup=back_home_keyboard(),
-        )
+def _osm_place(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
+    place = context.user_data.get(OSM_PLACE_KEY)
+    return place if isinstance(place, dict) and "lat" in place else None
+
+
+def _set_osm_wait(context: ContextTypes.DEFAULT_TYPE, waiting: bool) -> None:
+    context.user_data[OSM_WAIT_KEY] = waiting
+
+
+async def show_osm_world(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _set_osm_wait(context, True)
+    await reply_html(update, context, format_osm_world(), reply_markup=osm_world_keyboard())
+
+
+async def show_osm_place(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    place = _osm_place(context)
+    if not place:
+        await show_osm_world(update, context)
         return
-    place_id = meta["id"]
-    cat = resolve_category(category) if category else None
-    if category and not cat:
-        await show_osm(update, context, place_id, None)
-        return
-    if cat:
-        await reply_html(
-            update,
-            context,
-            f"🗺️ <b>LIVE OSM</b>\n\nInterrogo OpenStreetMap su {meta['title']}…",
-            reply_markup=osm_category_keyboard(place_id, cat),
-        )
-        bundle = await asyncio.to_thread(search_place, place_id, cat)
-        await reply_html(
-            update,
-            context,
-            format_osm_category(bundle),
-            reply_markup=osm_category_keyboard(place_id, cat),
-            preview=True,
-        )
-        return
+    _set_osm_wait(context, False)
+    await reply_html(update, context, format_osm_place(place), reply_markup=osm_place_keyboard())
+
+
+async def osm_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
+    _set_osm_wait(context, False)
     await reply_html(
         update,
         context,
-        f"🗺️ <b>LIVE OSM</b>\n\nInterrogo OpenStreetMap su {meta['title']}…",
-        reply_markup=osm_place_keyboard(place_id),
+        f"🌍 <b>OSM WORLD</b>\n\nCerco <b>{query}</b>…",
+        reply_markup=osm_world_keyboard(),
     )
-    bundle = await asyncio.to_thread(search_place, place_id)
+    result = await asyncio.to_thread(geocode, query)
+    if not result.get("ok"):
+        _set_osm_wait(context, True)
+        await reply_html(
+            update,
+            context,
+            f"🌍 <b>OSM WORLD</b>\n\nNessun luogo per «{query}».\n"
+            f"<i>{result.get('error') or 'geocoder vuoto'}</i>\n\nScrivi un'altra località.",
+            reply_markup=osm_world_keyboard(),
+        )
+        return
+    hits = list(result.get("hits") or [])
+    context.user_data[OSM_HITS_KEY] = hits
+    if len(hits) == 1:
+        context.user_data[OSM_PLACE_KEY] = hits[0]
+        context.user_data.pop(OSM_ROWS_KEY, None)
+        context.user_data.pop(OSM_CAT_KEY, None)
+        await show_osm_place(update, context)
+        return
+    await reply_html(update, context, format_osm_hits(query, hits), reply_markup=osm_hits_keyboard(len(hits)))
+
+
+async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str) -> None:
+    place = _osm_place(context)
+    if not place:
+        await show_osm_world(update, context)
+        return
+    cat = resolve_category(category)
+    if not cat:
+        await show_osm_place(update, context)
+        return
+    _set_osm_wait(context, False)
     await reply_html(
         update,
         context,
-        format_osm_place(bundle),
-        reply_markup=osm_place_keyboard(place_id),
+        f"🌍 <b>OSM WORLD</b>\n\nInterrogo Overpass · {place.get('display')}…",
+        reply_markup=osm_place_keyboard(),
+    )
+    bundle = await asyncio.to_thread(osm_search_bbox, place["bbox"], cat)
+    rows = list(bundle.get("rows") or [])
+    context.user_data[OSM_ROWS_KEY] = rows
+    context.user_data[OSM_CAT_KEY] = cat
+    await reply_html(
+        update,
+        context,
+        format_osm_category(bundle, place),
+        reply_markup=osm_category_keyboard(rows),
         preview=True,
     )
+
+
+async def show_osm_item(update: Update, context: ContextTypes.DEFAULT_TYPE, index: int) -> None:
+    rows = context.user_data.get(OSM_ROWS_KEY)
+    if not isinstance(rows, list) or index < 0 or index >= len(rows):
+        cat = context.user_data.get(OSM_CAT_KEY)
+        if cat:
+            await show_osm_category(update, context, str(cat))
+            return
+        await show_osm_place(update, context)
+        return
+    row = rows[index]
+    await reply_html(
+        update,
+        context,
+        format_osm_item(row, _osm_place(context)),
+        reply_markup=osm_item_keyboard(),
+        preview=True,
+    )
+
+
+async def show_osm_map(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    place = _osm_place(context)
+    if not place:
+        await show_osm_world(update, context)
+        return
+    await reply_html(update, context, format_osm_map(place), reply_markup=osm_place_keyboard(), preview=True)
+
+
+async def show_osm_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cat = context.user_data.get(OSM_CAT_KEY)
+    if cat:
+        await show_osm_category(update, context, str(cat))
+        return
+    await show_osm_place(update, context)
+
+
+async def open_ow(update: Update, context: ContextTypes.DEFAULT_TYPE, extra: str) -> None:
+    extra = (extra or "").strip()
+    if not extra:
+        await show_osm_world(update, context)
+        return
+    kind, _, rest = extra.partition(":")
+    if kind == "p" and rest.isdigit():
+        hits = context.user_data.get(OSM_HITS_KEY)
+        idx = int(rest)
+        if isinstance(hits, list) and 0 <= idx < len(hits):
+            context.user_data[OSM_PLACE_KEY] = hits[idx]
+            context.user_data.pop(OSM_ROWS_KEY, None)
+            context.user_data.pop(OSM_CAT_KEY, None)
+            await show_osm_place(update, context)
+            return
+        await show_osm_world(update, context)
+        return
+    if kind == "c" and rest:
+        await show_osm_category(update, context, rest)
+        return
+    if kind == "i" and rest.isdigit():
+        await show_osm_item(update, context, int(rest))
+        return
+    if kind == "map":
+        await show_osm_map(update, context)
+        return
+    if kind == "here":
+        await show_osm_place(update, context)
+        return
+    if kind == "list":
+        await show_osm_list(update, context)
+        return
+    # legacy live:osm:milano → ricerca libera
+    query = extra.replace(":", " ").strip()
+    if query and query not in {"q", "search"}:
+        await osm_lookup(update, context, query)
+        return
+    await show_osm_world(update, context)
+
+
+async def cmd_osm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    if args:
+        query = " ".join(args)
+        _cmd_begin(context, "live:ow")
+        await osm_lookup(update, context, query)
+    else:
+        _cmd_begin(context, "live:ow")
+        await show_osm_world(update, context)
+    await delete_user_command(update)
 
 
 async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = [a.strip() for a in (context.args or []) if a.strip()]
     if args:
-        place = args[0]
-        category = args[1] if len(args) > 1 else None
-        token = f"live:osm:{resolve_place(place)['id']}" if resolve_place(place) else f"live:osm:{place.lower()}"
-        if category and resolve_category(category):
-            token = f"{token}:{resolve_category(category)}"
-        _cmd_begin(context, token)
-        await show_osm(update, context, place, category)
+        _cmd_begin(context, "live:ow")
+        await osm_lookup(update, context, " ".join(args))
         await delete_user_command(update)
         return
     _cmd_begin(context, "home:live")
     await show_live_hub(update, context)
+    await delete_user_command(update)
+
+
+async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.user_data.get(OSM_WAIT_KEY):
+        return
+    message = update.effective_message
+    if message is None or not message.text:
+        return
+    query = message.text.strip()
+    if len(query) < 2:
+        return
+    _cmd_begin(context, "live:ow")
+    await osm_lookup(update, context, query)
     await delete_user_command(update)
 
 
@@ -486,7 +621,7 @@ async def on_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await reply_html(
         update,
         context,
-        "Comando sconosciuto. /aiuto elenca aerei, navi e ISS.",
+        "Comando sconosciuto. /aiuto · /osm per il mondo OSM.",
         reply_markup=back_home_keyboard(),
     )
 
@@ -510,7 +645,8 @@ async def post_init(application: Application) -> None:
         await application.bot.set_my_commands(
             [
                 BotCommand("start", "Posizioni live: aerei, navi, ISS"),
-                BotCommand("live", "Hub live, o /live milano per OSM"),
+                BotCommand("live", "Hub: ISS, aerei, navi"),
+                BotCommand("osm", "OSM WORLD: cerca una località"),
                 BotCommand("aerei", "Aerei in volo su una zona"),
                 BotCommand("elicotteri", "Solo elicotteri, stessa zona"),
                 BotCommand("navi", "Navi AIS del Baltico"),
@@ -528,6 +664,7 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler(["aiuto", "help"], cmd_aiuto))
     application.add_handler(CommandHandler(["live", "adsb", "ais"], cmd_live))
+    application.add_handler(CommandHandler(["osm", "overpass"], cmd_osm))
     application.add_handler(CommandHandler(["aerei", "aircraft"], cmd_aerei))
     application.add_handler(CommandHandler(["elicotteri", "eli"], cmd_elicotteri))
     application.add_handler(CommandHandler(["navi", "ships"], cmd_navi))
@@ -535,6 +672,7 @@ def build_application(token: str) -> Application:
     application.add_handler(CallbackQueryHandler(on_nav_action, pattern=r"^nav:"))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^home:"))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^live:"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_plain_text))
     application.add_handler(MessageHandler(filters.COMMAND, on_unknown_command))
     application.add_error_handler(on_error)
     return application

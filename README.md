@@ -12,7 +12,7 @@ Non è un radar militare e non serve a inseguire bersagli. I dati sono quelli ch
 | 🚁 Elicotteri | stesso ADS-B, categoria eli | Stesse zone |
 | ⚓ Navi | AIS aperto [Digitraffic](https://www.digitraffic.fi) (Finlandia) | Mar Baltico / acque finlandesi — un mare vero, non un AIS mondiale |
 | 🛰️ ISS | [wheretheiss.at](https://wheretheiss.at) | Lat/lon, quota, velocità, luce o ombra |
-| 🗺️ OSM | Overpass ([maps.mail.ru](https://maps.mail.ru/osm/tools/overpass/api/interpreter)) | Aeroporti, stazioni, ospedali in un bounding box. Primo luogo: `/live milano` |
+| 🗺️ OSM WORLD | Overpass + geocoder (Photon, Nominatim in fallback) | Cerchi una località, poi una categoria. Overpass parte solo al tap |
 
 Nel web: `/` e `/live` (hub con mappa), `/live/ac`, `/live/heli`, `/live/navi`, `/live/iss`, `/live.json`.
 
@@ -47,7 +47,8 @@ Non avviare il polling in locale se il bot è già in webhook su Render: Telegra
 
 ```
 start - Hub live: ISS, aerei, navi
-live - Hub live, o /live milano per OSM
+live - Hub live
+osm - OSM WORLD: cerca una città, poi le categorie
 aerei - ADS-B su una zona (it, med, eu, uk, us, jp)
 elicotteri - Solo elicotteri
 navi - AIS aperto del Baltico
@@ -62,8 +63,11 @@ bot.py                 Telegram: nav, un solo messaggio, webhook/polling
 museum.py              Mappa web sugli stessi feed (porta 47261)
 ui/keyboards.py        Tastiere inline
 ui/texts.py            Testi di interfaccia
-services/live/feeds.py ADS-B, AIS, ISS
-services/live/osm.py   OpenStreetMap via Overpass
+services/live/feeds.py    ADS-B, AIS, ISS
+services/live/geocode.py  Geocoder sostituibile + cache (Photon / Nominatim)
+services/live/osm.py      Overpass per categoria, filtri stazioni, schede
 ```
 
-Callback: `home:live`, `live:ac:it`, `live:heli:med`, `live:ships`, `live:iss`, `live:osm:milano`, `live:osm:milano:aerodrome`, `nav:back`, `home:menu`.
+🌍 **OSM WORLD** (`/osm` o bottone dal hub): scrivi Tokyo / Parigi / Milano. Il geocoder dà nome, paese, coordinate, bbox. Le categorie (aeroporti, stazioni ferroviarie, ospedali, porti, stadi, luoghi, centri commerciali, mappa) interrogano Overpass **solo al tap**. Le stazioni tengono `train=yes` / `building=train_station` / UIC e scartano metro, bus, fermate, piattaforme, ingressi.
+
+Callback: `home:live`, `live:ac:it`, `live:heli:med`, `live:ships`, `live:iss`, `live:ow`, `live:ow:c:rail`, `live:ow:i:0`, `nav:back`, `home:menu`.

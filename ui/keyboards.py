@@ -1,10 +1,11 @@
-"""Tastiere inline del live: hub, zone, navi, ISS."""
+"""Tastiere inline del live: hub, zone, navi, ISS, OSM WORLD."""
 
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.live import REGIONS
+from services.live.osm import CATEGORIES, LIST_LIMIT, WORLD_CATEGORIES
 
 
 def kb_btn(label: str, data: str) -> InlineKeyboardButton:
@@ -38,38 +39,59 @@ def live_hub_keyboard() -> InlineKeyboardMarkup:
             [kb_btn("🔄 Aggiorna posizioni", "home:live")],
             [kb_btn("✈️ Aerei Italia", "live:ac:it"), kb_btn("🌊 Mediterraneo", "live:ac:med")],
             [kb_btn("🚁 Elicotteri", "live:heli:it"), kb_btn("⚓ Navi Baltico", "live:ships")],
-            [kb_btn("🛰️ Mappa ISS", "live:iss"), kb_btn("🗺️ OSM Milano", "live:osm:milano")],
+            [kb_btn("🛰️ Mappa ISS", "live:iss"), kb_btn("🌍 OSM WORLD", "live:ow")],
             [kb_btn("❓ Aiuto", "home:aiuto")],
         ]
     )
 
 
-def osm_place_keyboard(place: str) -> InlineKeyboardMarkup:
+def osm_world_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [kb_btn("🔄 Aggiorna", f"live:osm:{place}")],
-            [
-                kb_btn("✈️ Aeroporti", f"live:osm:{place}:aerodrome"),
-                kb_btn("🚉 Stazioni", f"live:osm:{place}:station"),
-            ],
-            [kb_btn("🏥 Ospedali", f"live:osm:{place}:hospital")],
+            [kb_btn("🔎 Cerca località", "live:ow")],
             [kb_btn("📡 Posizioni live", "home:live")],
             nav_row(),
         ]
     )
 
 
-def osm_category_keyboard(place: str, category: str) -> InlineKeyboardMarkup:
+def osm_hits_keyboard(n: int) -> InlineKeyboardMarkup:
+    buttons = [kb_btn(str(i + 1), f"live:ow:p:{i}") for i in range(max(0, min(n, 5)))]
+    rows = _pairs(buttons)
+    rows.append([kb_btn("🔎 Un'altra ricerca", "live:ow")])
+    rows.append(nav_row())
+    return InlineKeyboardMarkup(rows)
+
+
+def osm_place_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        kb_btn(f"{CATEGORIES[key]['emoji']} {CATEGORIES[key]['title']}", f"live:ow:c:{key}")
+        for key in WORLD_CATEGORIES
+    ]
+    rows = _pairs(buttons)
+    rows.append([kb_btn("🗺️ Mappa", "live:ow:map")])
+    rows.append([kb_btn("🔎 Cerca un'altra località", "live:ow")])
+    rows.append([kb_btn("📡 Posizioni live", "home:live")])
+    rows.append(nav_row())
+    return InlineKeyboardMarkup(rows)
+
+
+def osm_category_keyboard(rows: list[dict] | None = None) -> InlineKeyboardMarkup:
+    items = list(rows or [])[:LIST_LIMIT]
+    buttons = [kb_btn(str(row.get("name") or "punto")[:40], f"live:ow:i:{i}") for i, row in enumerate(items)]
+    grid = _pairs(buttons)
+    grid.append([kb_btn("📍 Località", "live:ow:here"), kb_btn("🗺️ Mappa", "live:ow:map")])
+    grid.append([kb_btn("🔎 Cerca un'altra località", "live:ow")])
+    grid.append(nav_row())
+    return InlineKeyboardMarkup(grid)
+
+
+def osm_item_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [kb_btn("🔄 Aggiorna", f"live:osm:{place}:{category}")],
-            [
-                kb_btn("✈️ Aeroporti", f"live:osm:{place}:aerodrome"),
-                kb_btn("🚉 Stazioni", f"live:osm:{place}:station"),
-            ],
-            [kb_btn("🏥 Ospedali", f"live:osm:{place}:hospital")],
-            [kb_btn("🗺️ Riepilogo OSM", f"live:osm:{place}")],
-            [kb_btn("📡 Posizioni live", "home:live")],
+            [kb_btn("📋 Lista", "live:ow:list"), kb_btn("📍 Località", "live:ow:here")],
+            [kb_btn("🗺️ Mappa", "live:ow:map")],
+            [kb_btn("🔎 Cerca un'altra località", "live:ow")],
             nav_row(),
         ]
     )
