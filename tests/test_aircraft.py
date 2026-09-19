@@ -225,6 +225,8 @@ class FormatTest(unittest.TestCase):
         self.assertIn("limite", error_text({"code": "rate"}, place))
         self.assertIn("non è momentaneamente disponibile", error_text({"code": "unavailable"}, place))
         self.assertNotIn("Traceback", error_text({"code": "timeout"}, place))
+        self.assertIn("credenziali", error_text({"code": "auth", "http": 401}, place))
+        self.assertIn("bloccato", error_text({"code": "auth", "http": 403}, place))
 
     def test_in_volo_a_terra_sections(self) -> None:
         air = Aircraft("aa", "FLY", 45.47, 9.20, 8000, 200, 10, 0, False, 1, 3.0).as_row()
@@ -430,7 +432,9 @@ class ClientMockTest(unittest.TestCase):
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "auth")
         self.assertEqual(calls["n"], 1)
-        self.assertNotIn("Traceback", error_text(bundle, {"name": "Milano"}))
+        text = error_text(bundle, {"name": "Milano"})
+        self.assertNotIn("Traceback", text)
+        self.assertIn("bloccato", text)
 
     def test_no_anonymous_when_token_missing(self) -> None:
         self._token.stop()
@@ -584,6 +588,26 @@ class TokenFetchTest(unittest.TestCase):
         self.assertTrue(urls)
         self.assertTrue(all("states/all" not in url for url in urls))
         self.assertTrue(any("openid-connect/token" in url for url in urls))
+
+    def test_quoted_env_credentials(self) -> None:
+        from services.live.opensky_client import env_credentials
+
+        with patch.dict(
+            os.environ,
+            {"OPENSKY_CLIENT_ID": '"id-x"', "OPENSKY_CLIENT_SECRET": "'sec-y'"},
+            clear=False,
+        ):
+            self.assertEqual(env_credentials(), ("id-x", "sec-y"))
+
+    def test_token_timeout_is_timeout_not_denied(self) -> None:
+        with patch("services.live.opensky_client.http_request", return_value=(0, b"", {})):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        self.assertFalse(bundle["ok"])
+        self.assertEqual(bundle["code"], "timeout")
+        self.assertEqual(bundle["http"], 0)
+        text = error_text(bundle, {"name": "Milano"})
+        self.assertIn("non ha risposto", text)
+        self.assertNotIn("rifiutato", text)
 
 
 class LiveOpenSkyTest(unittest.TestCase):

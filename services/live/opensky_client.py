@@ -112,9 +112,16 @@ def http_request(
         return -1, b"", {}
 
 
+def _clean_env(raw: str | None) -> str:
+    text = (raw or "").strip().strip("\ufeff")
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1].strip()
+    return text
+
+
 def env_credentials() -> tuple[str, str] | None:
-    client_id = (os.getenv("OPENSKY_CLIENT_ID") or "").strip()
-    client_secret = (os.getenv("OPENSKY_CLIENT_SECRET") or "").strip()
+    client_id = _clean_env(os.getenv("OPENSKY_CLIENT_ID"))
+    client_secret = _clean_env(os.getenv("OPENSKY_CLIENT_SECRET"))
     if client_id and client_secret:
         return client_id, client_secret
     return None
@@ -133,6 +140,7 @@ class TokenManager:
         self._client_secret = client_secret
         self._token: str | None = None
         self._expires_at = 0.0
+        self.last_status: int | None = None
 
     @classmethod
     def from_env(cls) -> TokenManager | None:
@@ -142,12 +150,17 @@ class TokenManager:
         client_id, client_secret = creds
         return cls(client_id, client_secret)
 
-    def get_token(self, *, force: bool = False) -> str | None:
+    def get_token(
+        self,
+        *,
+        force: bool = False,
+        opener: urllib.request.OpenerDirector | None = None,
+    ) -> str | None:
         with self._lock:
             if not force and self._token and time.time() < self._expires_at:
                 log.info("[OPENSKY] auth=reuse")
                 return self._token
-            return self._refresh()
+            return self._refresh(opener=opener)
 
     def auth_headers(self, *, force: bool = False) -> dict[str, str] | None:
         token = self.get_token(force=force)
@@ -155,7 +168,7 @@ class TokenManager:
             return None
         return {"Authorization": f"Bearer {token}"}
 
-    def _refresh(self) -> str | None:
+    def _refresh(self, opener: urllib.request.OpenerDirector | None = None) -> str | None:
         body = urllib.parse.urlencode(
             {
                 "grant_type": "client_credentials",
@@ -174,7 +187,9 @@ class TokenManager:
             },
             data=body,
             timeout=TIMEOUT_S,
+            opener=opener,
         )
+        self.last_status = status
         if status != 200:
             log.info("[OPENSKY] auth=fail http=%s", status if status > 0 else "000")
             self._token = None
@@ -246,10 +261,17 @@ class OpenSkyClient:
         if tm is None:
             return None
         try:
-            return tm.get_token(force=force)
+            return tm.get_token(force=force, opener=self._opener)
         except Exception:
             log.info("[OPENSKY] auth=fail token_error")
             return None
+
+    def _token_fail_http(self) -> int:
+        tm = self._token_manager
+        status = getattr(tm, "last_status", None) if tm is not None else None
+        if status is None or status == 200:
+            return 401
+        return int(status)
 
     def _headers(self, token: str) -> dict[str, str]:
         return {
@@ -286,7 +308,9 @@ class OpenSkyClient:
             log.info("[OPENSKY] auth=fail token_error")
             return 401, b""
         if not token:
-            return 401, b""
+            http = self._token_fail_http()
+            log.info("[OPENSKY] auth=fail http=%s", http if http > 0 else "000")
+            return http, b""
 
         self._respect_states_interval()
         url = self.states_url(bbox)

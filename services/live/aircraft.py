@@ -558,7 +558,17 @@ def error_text(bundle: dict[str, Any], place: dict[str, Any] | None = None) -> s
             "Imposta OPENSKY_CLIENT_ID e OPENSKY_CLIENT_SECRET nelle variabili d'ambiente."
         )
     elif code == "auth":
-        body = "⚠️ OpenSky ha rifiutato l'accesso.\nRiprova tra poco."
+        if bundle.get("http") == 403:
+            body = (
+                "⚠️ OpenSky ha bloccato la richiesta da questo server.\n"
+                "Su Render l'API a volte risponde 403: le credenziali ci sono, l'IP cloud no."
+            )
+        else:
+            body = (
+                "⚠️ OpenSky ha rifiutato le credenziali.\n"
+                "Su Render imposta OPENSKY_CLIENT_ID e OPENSKY_CLIENT_SECRET "
+                "(client OAuth2, non username/password), senza virgolette."
+            )
     elif code == "timeout":
         body = "⚠️ OpenSky non ha risposto in tempo.\nRiprova tra poco."
     else:

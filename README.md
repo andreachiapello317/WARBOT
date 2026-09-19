@@ -69,7 +69,7 @@ Overpass primary: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Fai
 
 OpenSky: [REST](https://openskynetwork.github.io/opensky-api/rest.html) e [Python API 1.4.0](https://openskynetwork.github.io/opensky-api/python.html) — `GET /api/states/all` con bbox (`lamin`/`lamax`/`lomin`/`lomax`) e `extended=1`. Token OAuth2 riusato (TokenManager), sessione HTTP persistente, minimo 5s tra `get_states` autenticati. Niente accesso anonimo.
 
-Su Render imposta **obbligatorie**:
+Su Render imposta **obbligatorie** (valore nudo, senza virgolette; client OAuth2, non username/password):
 
 - `OPENSKY_CLIENT_ID`
 - `OPENSKY_CLIENT_SECRET`
