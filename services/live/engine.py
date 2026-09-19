@@ -13,7 +13,6 @@ Niente scorciatoie Turbo ({{bbox}}, {{geocodeArea}}, {{center}}).
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
@@ -22,10 +21,9 @@ from services.live import cache as osm_cache
 
 log = logging.getLogger("warbot.osm")
 
-TIMING = (os.getenv("OSM_TIMING") or "").strip().lower() in {"1", "true", "yes", "on"}
 FALLBACK_MIN = osm_cache.int_env("OSM_FALLBACK_MIN", 4, lo=1, hi=15)
-PAGE_SIZE = osm_cache.int_env("OSM_RESULT_LIMIT", 10, lo=5, hi=20)
-PAGE_CAP = osm_cache.int_env("OSM_PAGE_CAP", 10, lo=5, hi=20)
+PAGE_SIZE = osm_cache.int_env("OSM_RESULT_LIMIT", 20, lo=5, hi=40)
+PAGE_CAP = osm_cache.int_env("OSM_PAGE_CAP", 40, lo=20, hi=80)
 
 KINDS = {"node", "way", "rel", "nw", "nwr"}
 OPS = {"eq", "neq", "exists", "missing", "regex", "nregex"}
@@ -196,8 +194,9 @@ def as_clauses(raw: Iterable[Any]) -> tuple[Clause | str, ...]:
 
 
 def timed(label: str, t0: float, **extra: Any) -> float:
+    """Log [OSM PERF] sempre acceso. Niente token o payload Overpass."""
     elapsed = time.time() - t0
-    if TIMING:
-        bits = " ".join(f"{k}={v}" for k, v in extra.items())
-        log.info("timing %s %.3fs %s", label, elapsed, bits)
+    bits = " ".join(f"{k}={v}" for k, v in extra.items() if v is not None and k not in {"query", "token", "raw"})
+    suffix = f" {bits}" if bits else ""
+    log.info("[OSM PERF] %s=%.3fs%s", label, elapsed, suffix)
     return elapsed

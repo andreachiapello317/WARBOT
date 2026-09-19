@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from services.live.geocode import geocode
-from services.live.osm import CATEGORIES, OSM_NOTE, WORLD_CATEGORIES, osm_url, search
+from services.live.osm import CATEGORIES, NEAR_CATEGORIES, OSM_NOTE, WORLD_CATEGORIES, osm_url, search, search_near
 
 HOST = "0.0.0.0"
 PORT = 47261
@@ -214,7 +214,12 @@ def render_category(place: dict, cat: str) -> str:
     meta = CATEGORIES.get(cat)
     if not meta:
         return layout("Categoria", "<h1>Categoria assente</h1><p><a href='/'>Cerca</a></p>")
-    bundle = search(place["bbox"], cat, center=(place["lat"], place["lon"]))
+    bundle = search(
+        place["bbox"],
+        cat,
+        center=(place["lat"], place["lon"]),
+        hint=place.get("name") or "",
+    )
     qs = _place_qs(place)
     if not bundle.get("ok"):
         body = (
@@ -237,7 +242,7 @@ def render_category(place: dict, cat: str) -> str:
         extra = " / ".join(p for p in (r.get("iata"), r.get("icao"), r.get("uic")) if p)
         table_rows.append(
             "<tr>"
-            f"<td><b>{h(r['name'])}</b></td>"
+            f"<td><a href='/punto?name={h(r['name'])}&lat={r['lat']:.6f}&lon={r['lon']:.6f}'>{h(r['name'])}</a></td>"
             f"<td>{h(extra or r.get('operator') or '—')}</td>"
             f"<td>{r['lat']:.4f}, {r['lon']:.4f}</td>"
             f"<td><a href='{h(r['map'])}'>OSM</a></td>"
@@ -277,6 +282,74 @@ def render_map(place: dict) -> str:
         + _leaflet(points, (place["lat"], place["lon"]), 12)
     )
     return layout("Mappa", body, extra_head=LEAFLET_HEAD)
+
+
+def _punto_from_qs(qs: dict[str, list[str]]) -> dict | None:
+    try:
+        lat, lon = float((qs.get("lat") or [""])[0]), float((qs.get("lon") or [""])[0])
+    except (TypeError, ValueError):
+        return None
+    name = (qs.get("name") or [""])[0]
+    if not name:
+        return None
+    return {"name": name, "display": name, "lat": lat, "lon": lon, "map": osm_url(lat, lon, 16)}
+
+
+def render_punto(row: dict) -> str:
+    qs = urlencode({"name": row["name"], "lat": f"{row['lat']:.6f}", "lon": f"{row['lon']:.6f}"})
+    cats = "".join(
+        f'<a class="card" href="/vicino/{key}?{qs}"><h2>{CATEGORIES[key]["emoji"]} {h(CATEGORIES[key]["title"])}</h2>'
+        f"<p>Around sul punto. Overpass solo su questa categoria.</p></a>"
+        for key in NEAR_CATEGORIES
+    )
+    points = [{"lat": row["lat"], "lon": row["lon"], "label": html.escape(row["name"])}]
+    body = (
+        f"<h1>📍 {h(row['name'])}</h1>"
+        f"<p class='lead'>{row['lat']:.5f}, {row['lon']:.5f}</p>"
+        f'<p><a class="chip" href="{h(row["map"])}">🗺️ Apri mappa</a></p>'
+        f"<p class='lead'>Cosa c'è vicino? Overpass parte solo quando scegli.</p>"
+        + _leaflet(points, (row["lat"], row["lon"]), 16)
+        + f"<div class='grid'>{cats}</div>"
+    )
+    return layout(row["name"], body, extra_head=LEAFLET_HEAD)
+
+
+def render_vicino(row: dict, cat: str) -> str:
+    meta = CATEGORIES.get(cat)
+    if not meta:
+        return layout("Categoria", "<h1>Categoria assente</h1>")
+    bundle = search_near(row["lat"], row["lon"], cat, hint=row.get("name") or "")
+    qs = urlencode({"name": row["name"], "lat": f"{row['lat']:.6f}", "lon": f"{row['lon']:.6f}"})
+    if not bundle.get("ok"):
+        body = (
+            f"<h1>{meta['emoji']} {h(meta['title'])} vicino a {h(row['name'])}</h1>"
+            f"<p class='empty err'>Overpass: {h(bundle.get('error') or 'errore')}</p>"
+            f'<p><a class="chip" href="/vicino/{cat}?{qs}">Riprova</a> <a class="chip" href="/punto?{qs}">Scheda</a></p>'
+        )
+        return layout(meta["title"], body)
+    rows = bundle.get("rows") or []
+    points = [{"lat": r["lat"], "lon": r["lon"], "label": f"<b>{html.escape(r['name'])}</b>"} for r in rows]
+    points.append({"lat": row["lat"], "lon": row["lon"], "label": html.escape(row["name"])})
+    items = "".join(
+        f"<tr><td>{h(r['name'])}</td><td>{r['lat']:.4f}, {r['lon']:.4f}</td>"
+        f"<td><a href='{h(r['map'])}'>mappa</a></td></tr>"
+        for r in rows
+    )
+    table = (
+        "<table class='live-table'><thead><tr><th>Nome</th><th>Posizione</th><th></th></tr></thead><tbody>"
+        + items
+        + "</tbody></table>"
+        if items
+        else "<p class='empty'>Niente in questa categoria nei dintorni.</p>"
+    )
+    body = (
+        f"<h1>{meta['emoji']} {h(meta['title'])} · vicino a {h(row['name'])}</h1>"
+        f"<p class='lead'>around Overpass sul punto. {len(rows)} risultati.</p>"
+        f'<p><a class="chip" href="/punto?{qs}">📍 Scheda</a></p>'
+        + _leaflet(points, (row["lat"], row["lon"]), 15)
+        + table
+    )
+    return layout(meta["title"], body, extra_head=LEAFLET_HEAD)
 
 
 def render_help() -> str:
@@ -321,6 +394,13 @@ class Handler(BaseHTTPRequestHandler):
                 cat = path.split("/", 2)[-1]
                 place = _place_from_qs(qs)
                 page = render_category(place, cat) if place else render_home("")
+            elif path == "/punto":
+                row = _punto_from_qs(qs)
+                page = render_punto(row) if row else render_home("")
+            elif path.startswith("/vicino/"):
+                cat = path.split("/", 2)[-1]
+                row = _punto_from_qs(qs)
+                page = render_vicino(row, cat) if row else render_home("")
             elif path == "/mappa":
                 place = _place_from_qs(qs)
                 page = render_map(place) if place else render_home("")

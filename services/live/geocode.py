@@ -198,14 +198,14 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
     if len(q) < 2:
         return {"ok": False, "error": "scrivi almeno due lettere", "hits": [], "query": q}
     key = f"geo:{_backend()}|{q.lower()}|{limit}"
+    t0 = time.time()
     cached = osm_cache.get(key)
     if isinstance(cached, dict) and "hits" in cached:
         hits = list(cached.get("hits") or [])
+        timed("geocoding", t0, n=len(hits), cached=1)
         if hits:
             return {"ok": True, "hits": hits, "query": q, "cached": True}
         return {"ok": False, "error": cached.get("error") or "nessun luogo trovato", "hits": [], "query": q, "cached": True}
-
-    t0 = time.time()
     primary = _backend()
     fallback = "nominatim" if primary != "nominatim" else "photon"
     rows: list[dict[str, Any]] = []
@@ -225,5 +225,5 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
 
     rows.sort(key=_rank)
     osm_cache.put(key, {"hits": rows}, osm_cache.GEOCODE_TTL)
-    timed("geocode", t0, q=q, n=len(rows))
+    timed("geocoding", t0, n=len(rows))
     return {"ok": True, "hits": rows, "query": q, "cached": False}

@@ -1,4 +1,4 @@
-"""Compiler Overpass QL: settings, AND, union, difference, around, out center qt."""
+"""Compiler Overpass QL: settings, AND, union, difference, around, out center."""
 
 from __future__ import annotations
 

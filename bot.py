@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from typing import Any
 
 from dotenv import load_dotenv
@@ -28,6 +29,7 @@ from telegram.ext import (
 )
 
 from services.live.geocode import geocode
+from services.live.engine import timed
 from services.live.osm import (
     CATEGORIES,
     LIST_LIMIT,
@@ -35,18 +37,25 @@ from services.live.osm import (
     format_osm_category,
     format_osm_hits,
     format_osm_item,
+    format_osm_item_map,
+    format_osm_item_tags,
     format_osm_map,
+    format_osm_nearby_menu,
     format_osm_place,
     format_osm_world,
+    parse_osm_intent,
     peek as osm_peek,
     resolve_category,
     search as osm_search_bbox,
+    search_near,
 )
 from ui.keyboards import (
     back_home_keyboard,
     osm_category_keyboard,
     osm_hits_keyboard,
     osm_item_keyboard,
+    osm_item_side_keyboard,
+    osm_nearby_keyboard,
     osm_place_keyboard,
     osm_world_keyboard,
 )
@@ -67,6 +76,11 @@ OSM_HITS_KEY = "osm_hits"
 OSM_ROWS_KEY = "osm_rows"
 OSM_CAT_KEY = "osm_cat"
 OSM_PAGE_KEY = "osm_page"
+OSM_ITEM_KEY = "osm_item"
+OSM_CITY_ROWS_KEY = "osm_city_rows"
+OSM_CITY_CAT_KEY = "osm_city_cat"
+OSM_FILTER_KEY = "osm_filt"
+OSM_NEAR_KEY = "osm_near"
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -219,13 +233,52 @@ def _remember_from_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         nav_mark(context, query.data)
 
 
+def _set_osm_wait(context: ContextTypes.DEFAULT_TYPE, waiting: bool) -> None:
+    context.user_data[OSM_WAIT_KEY] = waiting
+
+
 def _osm_place(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
     place = context.user_data.get(OSM_PLACE_KEY)
     return place if isinstance(place, dict) and "lat" in place else None
 
 
-def _set_osm_wait(context: ContextTypes.DEFAULT_TYPE, waiting: bool) -> None:
-    context.user_data[OSM_WAIT_KEY] = waiting
+def _osm_filt(context: ContextTypes.DEFAULT_TYPE) -> dict[str, str]:
+    raw = context.user_data.get(OSM_FILTER_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _search_kwargs(context: ContextTypes.DEFAULT_TYPE, cat: str) -> dict[str, Any]:
+    filt = _osm_filt(context)
+    kwargs: dict[str, Any] = {"extra": ""}
+    bits: list[str] = []
+    if cat == "rail":
+        if filt.get("rail") == "all":
+            kwargs["min_score"] = 0
+            bits.append("all")
+        if filt.get("scope") == "ctr":
+            kwargs["radius_m"] = 6000
+            bits.append("ctr")
+        elif filt.get("scope") == "wide":
+            kwargs["radius_m"] = 20000
+            bits.append("wide")
+    if cat == "aero":
+        if filt.get("aero") == "any":
+            kwargs["min_score"] = 0
+            bits.append("any")
+        elif filt.get("aero") == "near":
+            kwargs["radius_m"] = 22000
+            bits.append("anear")
+    kwargs["extra"] = ",".join(bits)
+    return kwargs
+
+
+def _current_item(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
+    rows = context.user_data.get(OSM_ROWS_KEY)
+    idx = context.user_data.get(OSM_ITEM_KEY)
+    if isinstance(rows, list) and isinstance(idx, int) and 0 <= idx < len(rows):
+        return rows[idx]
+    saved = context.user_data.get("osm_item_row")
+    return saved if isinstance(saved, dict) and "lat" in saved else None
 
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -249,19 +302,21 @@ async def show_osm_place(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def osm_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
     _set_osm_wait(context, False)
+    intent = parse_osm_intent(query)
+    look = str(intent.get("query") or query)
     await reply_html(
         update,
         context,
-        f"🌍 <b>OSM WORLD</b>\n\nCerco <b>{query}</b>…",
+        f"🌍 <b>OSM WORLD</b>\n\nCerco <b>{look}</b>…",
         reply_markup=osm_world_keyboard(),
     )
-    result = await asyncio.to_thread(geocode, query)
+    result = await asyncio.to_thread(geocode, look)
     if not result.get("ok"):
         _set_osm_wait(context, True)
         await reply_html(
             update,
             context,
-            f"🌍 <b>OSM WORLD</b>\n\nNessun luogo per «{query}».\n"
+            f"🌍 <b>OSM WORLD</b>\n\nNessun luogo per «{look}».\n"
             f"<i>{result.get('error') or 'geocoder vuoto'}</i>\n\nScrivi un'altra località.",
             reply_markup=osm_world_keyboard(),
         )
@@ -272,9 +327,18 @@ async def osm_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, query: 
         context.user_data[OSM_PLACE_KEY] = hits[0]
         context.user_data.pop(OSM_ROWS_KEY, None)
         context.user_data.pop(OSM_CAT_KEY, None)
+        if intent.get("category"):
+            await show_osm_category(update, context, str(intent["category"]))
+            return
         await show_osm_place(update, context)
         return
-    await reply_html(update, context, format_osm_hits(query, hits), reply_markup=osm_hits_keyboard(len(hits)))
+    if intent.get("category") and hits:
+        context.user_data[OSM_PLACE_KEY] = hits[0]
+        context.user_data.pop(OSM_ROWS_KEY, None)
+        context.user_data.pop(OSM_CAT_KEY, None)
+        await show_osm_category(update, context, str(intent["category"]))
+        return
+    await reply_html(update, context, format_osm_hits(look, hits), reply_markup=osm_hits_keyboard(len(hits)))
 
 
 async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str) -> None:
@@ -288,7 +352,9 @@ async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
     _set_osm_wait(context, False)
     here = (place["lat"], place["lon"])
-    bundle = osm_peek(place["bbox"], cat, center=here)
+    extra_kw = _search_kwargs(context, cat)
+    extra = str(extra_kw.get("extra") or "")
+    bundle = osm_peek(place["bbox"], cat, center=here, extra=extra, radius_m=extra_kw.get("radius_m"))
     if bundle is None:
         await reply_html(
             update,
@@ -296,26 +362,42 @@ async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             f"🌍 <b>OSM WORLD</b>\n\nInterrogo Overpass · {place.get('display')}…",
             reply_markup=osm_place_keyboard(),
         )
-        bundle = await asyncio.to_thread(osm_search_bbox, place["bbox"], cat, center=here)
+        bundle = await asyncio.to_thread(
+            osm_search_bbox,
+            place["bbox"],
+            cat,
+            center=here,
+            hint=place.get("name") or "",
+            radius_m=extra_kw.get("radius_m"),
+            min_score=extra_kw.get("min_score"),
+            extra=extra,
+        )
     rows = list(bundle.get("rows") or [])
     context.user_data[OSM_ROWS_KEY] = rows
+    context.user_data[OSM_CITY_ROWS_KEY] = rows
     context.user_data[OSM_CAT_KEY] = cat
+    context.user_data[OSM_CITY_CAT_KEY] = cat
     context.user_data[OSM_PAGE_KEY] = 0
+    context.user_data[OSM_NEAR_KEY] = False
     if not bundle.get("ok"):
+        t_tg = time.time()
         await reply_html(
             update,
             context,
             format_osm_category(bundle, place),
-            reply_markup=osm_category_keyboard(error_cat=cat),
+            reply_markup=osm_category_keyboard(error_cat=cat, cat=cat, filt=_osm_filt(context)),
         )
+        timed("telegram", t_tg, cat=cat, ok=0)
         return
+    t_tg = time.time()
     await reply_html(
         update,
         context,
         format_osm_category(bundle, place, offset=0, limit=LIST_LIMIT),
-        reply_markup=osm_category_keyboard(rows, page=0),
+        reply_markup=osm_category_keyboard(rows, page=0, cat=cat, filt=_osm_filt(context)),
         preview=True,
     )
+    timed("telegram", t_tg, cat=cat, n=len(rows))
 
 
 async def show_osm_category_page(update: Update, context: ContextTypes.DEFAULT_TYPE, delta: int) -> None:
@@ -336,7 +418,13 @@ async def show_osm_category_page(update: Update, context: ContextTypes.DEFAULT_T
         update,
         context,
         format_osm_category(meta, _osm_place(context), offset=page * LIST_LIMIT, limit=LIST_LIMIT),
-        reply_markup=osm_category_keyboard(rows, page=page),
+        reply_markup=osm_category_keyboard(
+            rows,
+            page=page,
+            cat=str(cat),
+            filt=_osm_filt(context),
+            nearby=bool(context.user_data.get(OSM_NEAR_KEY)),
+        ),
         preview=True,
     )
 
@@ -350,10 +438,13 @@ async def show_osm_item(update: Update, context: ContextTypes.DEFAULT_TYPE, inde
             return
         await show_osm_place(update, context)
         return
+    context.user_data[OSM_ITEM_KEY] = index
+    row = rows[index]
+    context.user_data["osm_item_row"] = row
     await reply_html(
         update,
         context,
-        format_osm_item(rows[index], _osm_place(context)),
+        format_osm_item(row, _osm_place(context)),
         reply_markup=osm_item_keyboard(),
         preview=True,
     )
@@ -368,7 +459,138 @@ async def show_osm_map(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def show_osm_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    city_rows = context.user_data.get(OSM_CITY_ROWS_KEY)
+    city_cat = context.user_data.get(OSM_CITY_CAT_KEY)
+    if isinstance(city_rows, list) and city_cat:
+        context.user_data[OSM_ROWS_KEY] = city_rows
+        context.user_data[OSM_CAT_KEY] = city_cat
+        context.user_data[OSM_NEAR_KEY] = False
+        context.user_data[OSM_PAGE_KEY] = 0
+        meta = {
+            "ok": True,
+            "rows": city_rows,
+            "title": (CATEGORIES.get(str(city_cat)) or {}).get("title"),
+            "emoji": (CATEGORIES.get(str(city_cat)) or {}).get("emoji"),
+            "total": len(city_rows),
+            "pool": len(city_rows),
+        }
+        await reply_html(
+            update,
+            context,
+            format_osm_category(meta, _osm_place(context), offset=0, limit=LIST_LIMIT),
+            reply_markup=osm_category_keyboard(city_rows, page=0, cat=str(city_cat), filt=_osm_filt(context)),
+            preview=True,
+        )
+        return
     cat = context.user_data.get(OSM_CAT_KEY)
+    if cat:
+        await show_osm_category(update, context, str(cat))
+        return
+    await show_osm_place(update, context)
+
+
+async def show_osm_item_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    idx = context.user_data.get(OSM_ITEM_KEY)
+    if isinstance(idx, int):
+        await show_osm_item(update, context, idx)
+        return
+    row = _current_item(context)
+    if row:
+        await reply_html(update, context, format_osm_item(row, _osm_place(context)), reply_markup=osm_item_keyboard(), preview=True)
+        return
+    await show_osm_list(update, context)
+
+
+async def show_osm_item_map(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    row = _current_item(context)
+    if not row:
+        await show_osm_map(update, context)
+        return
+    await reply_html(update, context, format_osm_item_map(row), reply_markup=osm_item_side_keyboard(), preview=True)
+
+
+async def show_osm_item_tags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    row = _current_item(context)
+    if not row:
+        await show_osm_list(update, context)
+        return
+    await reply_html(update, context, format_osm_item_tags(row), reply_markup=osm_item_side_keyboard(), preview=True)
+
+
+async def show_osm_nearby_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, *, zone: bool = False) -> None:
+    row = context.user_data.get("osm_item_row")
+    if not isinstance(row, dict) or "lat" not in row:
+        row = _current_item(context)
+    if not row:
+        await show_osm_place(update, context)
+        return
+    await reply_html(
+        update,
+        context,
+        format_osm_nearby_menu(row, zone=zone),
+        reply_markup=osm_nearby_keyboard(zone=zone),
+        preview=True,
+    )
+
+
+async def show_osm_near_category(update: Update, context: ContextTypes.DEFAULT_TYPE, category: str) -> None:
+    row = context.user_data.get("osm_item_row")
+    if not isinstance(row, dict) or "lat" not in row:
+        row = _current_item(context)
+    if not row:
+        await show_osm_place(update, context)
+        return
+    cat = resolve_category(category)
+    if not cat:
+        await show_osm_nearby_menu(update, context)
+        return
+    await reply_html(
+        update,
+        context,
+        f"🌍 <b>OSM WORLD</b>\n\nVicino a <b>{row.get('name')}</b> · {CATEGORIES.get(cat, {}).get('title')}…",
+        reply_markup=osm_nearby_keyboard(),
+    )
+    bundle = await asyncio.to_thread(search_near, float(row["lat"]), float(row["lon"]), cat, hint=str(row.get("name") or ""))
+    rows = list(bundle.get("rows") or [])
+    context.user_data[OSM_ROWS_KEY] = rows
+    context.user_data[OSM_CAT_KEY] = cat
+    context.user_data[OSM_PAGE_KEY] = 0
+    context.user_data[OSM_NEAR_KEY] = True
+    if not bundle.get("ok"):
+        await reply_html(
+            update,
+            context,
+            format_osm_category(bundle, {"display": row.get("name"), "name": row.get("name")}),
+            reply_markup=osm_category_keyboard(error_cat=cat, nearby=True),
+        )
+        return
+    await reply_html(
+        update,
+        context,
+        format_osm_category(bundle, {"display": row.get("name"), "name": row.get("name")}, offset=0, limit=LIST_LIMIT),
+        reply_markup=osm_category_keyboard(rows, page=0, cat=cat, nearby=True),
+        preview=True,
+    )
+
+
+async def apply_osm_filter(update: Update, context: ContextTypes.DEFAULT_TYPE, token: str) -> None:
+    filt = _osm_filt(context)
+    if token == "main":
+        filt["rail"] = "main"
+    elif token == "all":
+        filt["rail"] = "all"
+    elif token == "ctr":
+        filt["scope"] = "ctr"
+    elif token == "wide":
+        filt["scope"] = "wide"
+    elif token == "pax":
+        filt["aero"] = "pax"
+    elif token == "any":
+        filt["aero"] = "any"
+    elif token == "anear":
+        filt["aero"] = "near"
+    context.user_data[OSM_FILTER_KEY] = filt
+    cat = context.user_data.get(OSM_CITY_CAT_KEY) or context.user_data.get(OSM_CAT_KEY)
     if cat:
         await show_osm_category(update, context, str(cat))
         return
@@ -400,6 +622,27 @@ async def open_ow(update: Update, context: ContextTypes.DEFAULT_TYPE, extra: str
         return
     if kind == "map":
         await show_osm_map(update, context)
+        return
+    if kind == "imap":
+        await show_osm_item_map(update, context)
+        return
+    if kind == "osm":
+        await show_osm_item_tags(update, context)
+        return
+    if kind == "near":
+        await show_osm_nearby_menu(update, context, zone=False)
+        return
+    if kind == "zone":
+        await show_osm_nearby_menu(update, context, zone=True)
+        return
+    if kind == "n" and rest:
+        await show_osm_near_category(update, context, rest)
+        return
+    if kind == "f" and rest:
+        await apply_osm_filter(update, context, rest)
+        return
+    if kind == "backi":
+        await show_osm_item_back(update, context)
         return
     if kind == "here":
         await show_osm_place(update, context)
