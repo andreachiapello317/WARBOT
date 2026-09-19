@@ -165,7 +165,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch("worlds.city.geocode", side_effect=self._geocode),
             patch("worlds.osm.queries.search") as osm_search,
-            patch("worlds.opensky.queries.get_aircraft_nearby") as sky_search,
+            patch("worlds.opensky.queries.get_aircraft_in_bbox") as sky_search,
             patch("services.live.osm.search") as osm_search2,
         ):
             osm_search.side_effect = AssertionError("Overpass sul WORLD MENU")
@@ -207,7 +207,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
             patch("worlds.osm.queries.peek", return_value=None),
             patch("worlds.osm.handler.peek_query", return_value=None),
             patch("worlds.osm.handler.run_query", return_value=fake_bundle) as run,
-            patch("worlds.opensky.queries.get_aircraft_nearby") as sky,
+            patch("worlds.opensky.queries.get_aircraft_in_bbox") as sky,
         ):
             sky.side_effect = AssertionError("OpenSky non deve partire da OSM stazioni")
             await show_query(self.update, self.ctx, "rail")  # type: ignore[arg-type]
@@ -222,7 +222,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         fake = {"ok": True, "aircraft": [{"icao24": "abc", "callsign": "AZA123", "distance_km": 12, "altitude": 8000, "velocity": 200, "heading": 90, "on_ground": False}], "time": 1}
 
         with (
-            patch("worlds.opensky.queries.get_aircraft_nearby", return_value=fake) as sky,
+            patch("worlds.opensky.queries.get_aircraft_in_bbox", return_value=fake) as sky,
             patch("worlds.osm.queries.search") as osm,
         ):
             osm.side_effect = AssertionError("Overpass non deve partire da OpenSky")
@@ -241,7 +241,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch("worlds.city.geocode", side_effect=self._geocode),
             patch("worlds.osm.queries.search") as osm,
-            patch("worlds.opensky.queries.get_aircraft_nearby") as sky,
+            patch("worlds.opensky.queries.get_aircraft_in_bbox") as sky,
         ):
             osm.side_effect = AssertionError("no overpass")
             sky.side_effect = AssertionError("no opensky")

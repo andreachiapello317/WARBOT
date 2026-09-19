@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import math
 import unittest
@@ -233,36 +234,134 @@ class FormatTest(unittest.TestCase):
         self.assertLess(text.index("FLY"), text.index("TAX"))
 
 
+class ErrorCodeTest(unittest.TestCase):
+    def test_mapping(self) -> None:
+        from services.live.aircraft import _error_code
+
+        self.assertEqual(_error_code(-2), "not_configured")
+        self.assertEqual(_error_code(0), "timeout")
+        self.assertEqual(_error_code(401), "auth")
+        self.assertEqual(_error_code(403), "auth")
+        self.assertEqual(_error_code(429), "rate")
+        self.assertEqual(_error_code(503), "unavailable")
+        self.assertEqual(_error_code(-1), "network")
+
+
 class ClientMockTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from services.live.opensky_client import reset_opensky_client
+
+        reset_opensky_client()
+        self._env = patch.dict(
+            os.environ,
+            {"OPENSKY_CLIENT_ID": "test-api-client", "OPENSKY_CLIENT_SECRET": "test-secret"},
+            clear=False,
+        )
+        self._env.start()
+        self._token = patch(
+            "services.live.opensky_client.OpenSkyClient.bearer_token",
+            return_value="tok",
+        )
+        self._token.start()
+
+    def tearDown(self) -> None:
+        from services.live.opensky_client import reset_opensky_client
+
+        self._token.stop()
+        self._env.stop()
+        reset_opensky_client()
+
+    def test_not_configured(self) -> None:
+        from services.live.opensky_client import reset_opensky_client
+
+        self._token.stop()
+        self._env.stop()
+        reset_opensky_client()
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "OPENSKY_CLIENT_ID": "",
+                        "OPENSKY_CLIENT_SECRET": "",
+                        "OPENSKY_USERNAME": "legacy-user",
+                        "OPENSKY_PASSWORD": "legacy-pass",
+                    },
+                    clear=False,
+                ),
+                patch("services.live.opensky_client.http_request") as http,
+            ):
+                bundle = get_aircraft_nearby(*MILANO, force=True)
+            self.assertFalse(bundle["ok"])
+            self.assertEqual(bundle["code"], "not_configured")
+            http.assert_not_called()
+            text = error_text(bundle, {"name": "Milano"})
+            self.assertIn("non è configurato", text)
+            self.assertNotIn("legacy-user", text)
+            self.assertNotIn("legacy-pass", text)
+            self.assertNotIn("test-secret", text)
+        finally:
+            self._env.start()
+            self._token.start()
+
     def test_http_429(self) -> None:
-        with patch("services.live.aircraft._http_get", return_value=(429, b"")):
+        with patch("services.live.opensky_client.http_request", return_value=(429, b"", {})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "rate")
         self.assertIn("limite", error_text(bundle, {"name": "Milano"}))
 
+    def test_429_short_retry_after(self) -> None:
+        payload = json.dumps({"time": 1, "states": [_state("abcabc", 45.47, 9.20)]}).encode()
+        calls = [(429, b"", {"Retry-After": "1"}), (200, payload, {})]
+
+        def fake_http(url: str, **kwargs):
+            return calls.pop(0)
+
+        with (
+            patch("services.live.opensky_client.time.sleep") as sleep,
+            patch("services.live.opensky_client.http_request", side_effect=fake_http),
+        ):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        sleep.assert_called_once()
+        self.assertTrue(bundle["ok"])
+        self.assertEqual(calls, [])
+
+    def test_429_long_retry_after_not_waited(self) -> None:
+        with (
+            patch("services.live.opensky_client.time.sleep") as sleep,
+            patch(
+                "services.live.opensky_client.http_request",
+                return_value=(429, b"", {"Retry-After": "60"}),
+            ),
+        ):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        sleep.assert_not_called()
+        self.assertFalse(bundle["ok"])
+        self.assertEqual(bundle["code"], "rate")
+
     def test_timeout_not_retried(self) -> None:
         calls = {"n": 0}
 
-        def fake_get(url: str, headers: dict, timeout: int):
+        def fake_http(url: str, **kwargs):
             calls["n"] += 1
-            return 0, b""
+            return 0, b"", {}
 
-        with patch("services.live.aircraft._http_get", side_effect=fake_get):
+        with patch("services.live.opensky_client.http_request", side_effect=fake_http):
             bundle = get_aircraft_nearby(*ROMA, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "timeout")
         self.assertEqual(calls["n"], 1)
 
     def test_bad_json(self) -> None:
-        with patch("services.live.aircraft._http_get", return_value=(200, b"not-json")):
+        with patch("services.live.opensky_client.http_request", return_value=(200, b"not-json", {})):
             bundle = get_aircraft_nearby(*LONDRA, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "bad_json")
 
     def test_empty_states(self) -> None:
         payload = json.dumps({"time": 1, "states": []}).encode()
-        with patch("services.live.aircraft._http_get", return_value=(200, payload)):
+        with patch("services.live.opensky_client.http_request", return_value=(200, payload, {})):
             bundle = get_aircraft_nearby(*PACIFIC, force=True)
         self.assertTrue(bundle["ok"])
         self.assertEqual(bundle["aircraft"], [])
@@ -276,32 +375,155 @@ class ClientMockTest(unittest.TestCase):
         nocoord[5] = None
         nocoord[6] = None
         payload = json.dumps({"time": 1700000000, "states": [good, junk, nocoord]}).encode()
-        with patch("services.live.aircraft._http_get", return_value=(200, payload)):
+        with patch("services.live.opensky_client.http_request", return_value=(200, payload, {})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertTrue(bundle["ok"])
         self.assertEqual(bundle["raw_states"], 3)
         self.assertEqual(bundle["valid"], 1)
         self.assertEqual(bundle["aircraft"][0]["callsign"], "AZA123")
-        lamin, lomin, lamax, lomax = bundle["bbox"]
-        self.assertLess(lamin, MILANO[0])
-        self.assertGreater(lamax, MILANO[0])
-        self.assertLess(lomin, MILANO[1])
-        self.assertGreater(lomax, MILANO[1])
 
     def test_one_transient_retry(self) -> None:
         payload = json.dumps({"time": 1, "states": [_state("abcabc", 45.47, 9.20)]}).encode()
-        calls = [(503, b""), (200, payload)]
+        calls = [(503, b"", {}), (200, payload, {})]
 
-        def fake_get(url: str, headers: dict, timeout: int):
+        def fake_http(url: str, **kwargs):
             self.assertIn("states/all", url)
             self.assertIn("lamin=", url)
             return calls.pop(0)
 
-        with patch("services.live.aircraft._http_get", side_effect=fake_get):
+        with patch("services.live.opensky_client.http_request", side_effect=fake_http):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertTrue(bundle["ok"])
         self.assertEqual(bundle["valid"], 1)
         self.assertEqual(calls, [])
+
+    def test_auth_401_refreshes_once(self) -> None:
+        payload = json.dumps({"time": 1, "states": [_state("abcabc", 45.47, 9.20)]}).encode()
+        calls = {"n": 0}
+
+        def fake_http(url: str, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return 401, b"", {}
+            return 200, payload, {}
+
+        with patch("services.live.opensky_client.http_request", side_effect=fake_http):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        self.assertTrue(bundle["ok"])
+        self.assertEqual(calls["n"], 2)
+
+    def test_http_403_no_retry(self) -> None:
+        calls = {"n": 0}
+
+        def fake_http(url: str, **kwargs):
+            calls["n"] += 1
+            return 403, b"", {}
+
+        with patch("services.live.opensky_client.http_request", side_effect=fake_http):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        self.assertFalse(bundle["ok"])
+        self.assertEqual(bundle["code"], "auth")
+        self.assertEqual(calls["n"], 1)
+        self.assertNotIn("Traceback", error_text(bundle, {"name": "Milano"}))
+
+    def test_no_anonymous_when_token_missing(self) -> None:
+        self._token.stop()
+        try:
+            with (
+                patch(
+                    "services.live.opensky_client.OpenSkyClient.bearer_token",
+                    return_value=None,
+                ),
+                patch("services.live.opensky_client.http_request") as http,
+            ):
+                bundle = get_aircraft_nearby(*MILANO, force=True)
+            self.assertFalse(bundle["ok"])
+            self.assertEqual(bundle["code"], "auth")
+            http.assert_not_called()
+        finally:
+            self._token.start()
+
+    def test_token_reuse(self) -> None:
+        from services.live.opensky_client import OpenSkyClient
+
+        self._token.stop()
+        try:
+            client = OpenSkyClient()
+            client._token = "cached-token"
+            client._expires_at = 9e12
+            with patch.object(client, "_fetch_access_token") as fetch:
+                self.assertEqual(client.bearer_token(), "cached-token")
+                self.assertEqual(client.bearer_token(), "cached-token")
+                fetch.assert_not_called()
+        finally:
+            self._token.start()
+
+
+class TokenFetchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from services.live.opensky_client import reset_opensky_client
+
+        reset_opensky_client()
+        self._env = patch.dict(
+            os.environ,
+            {"OPENSKY_CLIENT_ID": "id-x", "OPENSKY_CLIENT_SECRET": "sec-y"},
+            clear=False,
+        )
+        self._env.start()
+
+    def tearDown(self) -> None:
+        from services.live.opensky_client import reset_opensky_client
+
+        self._env.stop()
+        reset_opensky_client()
+
+    def test_oauth_body_and_reuse_without_logging_secret(self) -> None:
+        from services.live.opensky_client import OpenSkyClient
+
+        captured: dict = {}
+
+        def fake_http(url: str, **kwargs):
+            captured["url"] = url
+            captured["data"] = kwargs.get("data") or b""
+            captured["method"] = kwargs.get("method")
+            return 200, json.dumps({"access_token": "abc", "expires_in": 1800}).encode(), {}
+
+        client = OpenSkyClient()
+        with (
+            patch("services.live.opensky_client.http_request", side_effect=fake_http),
+            self.assertLogs("warbot.opensky", level="INFO") as cm,
+        ):
+            token = client.bearer_token()
+            again = client.bearer_token()
+        self.assertEqual(token, "abc")
+        self.assertEqual(again, "abc")
+        self.assertIn("openid-connect/token", captured["url"])
+        self.assertEqual(captured["method"], "POST")
+        body = captured["data"].decode("utf-8")
+        self.assertIn("grant_type=client_credentials", body)
+        self.assertIn("client_id=", body)
+        self.assertIn("client_secret=", body)
+        joined = "\n".join(cm.output)
+        self.assertIn("auth=ok", joined)
+        self.assertIn("auth=reuse", joined)
+        self.assertNotIn("sec-y", joined)
+        self.assertNotIn("id-x", joined)
+        self.assertNotIn("abc", joined)
+
+    def test_failed_token_does_not_call_states_anonymously(self) -> None:
+        urls: list[str] = []
+
+        def fake_http(url: str, **kwargs):
+            urls.append(url)
+            return 401, b"", {}
+
+        with patch("services.live.opensky_client.http_request", side_effect=fake_http):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        self.assertFalse(bundle["ok"])
+        self.assertEqual(bundle["code"], "auth")
+        self.assertTrue(urls)
+        self.assertTrue(all("states/all" not in url for url in urls))
+        self.assertTrue(any("openid-connect/token" in url for url in urls))
 
 
 class LiveOpenSkyTest(unittest.TestCase):

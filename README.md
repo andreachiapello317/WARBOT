@@ -58,7 +58,8 @@ worlds/opensky/             Menu + query wrapper → services/live/aircraft.py
 services/live/geocode.py    Photon / Nominatim
 services/live/engine.py     Compilatore Overpass QL
 services/live/osm.py        Motore OSM (filtri, ranking, cache, failover)
-services/live/aircraft.py   Client OpenSky GET /states/all
+services/live/opensky_client.py  OAuth2 client (token riusato)
+services/live/aircraft.py   Normalizzazione GET /states/all
 museum.py                   Web OSM WORLD (invariato)
 ```
 
@@ -66,4 +67,11 @@ Callback: `city:ask`, `world:list`, `world:osm`, `world:opensky`, `osm:rail`, `o
 
 Overpass primary: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Failover già nel client Overpass.
 
-OpenSky: [documentazione ufficiale](https://openskynetwork.github.io/opensky-api/) — `GET /api/states/all` con bbox. OAuth2 opzionale: `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`.
+OpenSky: [documentazione ufficiale](https://openskynetwork.github.io/opensky-api/) — `GET /api/states/all` con bbox.
+
+Su Render imposta **obbligatorie**:
+
+- `OPENSKY_CLIENT_ID`
+- `OPENSKY_CLIENT_SECRET`
+
+OAuth2 client credentials. **Non** usare `OPENSKY_USERNAME` / `OPENSKY_PASSWORD`. Niente file `credentials.json` nel repo. Senza `OPENSKY_CLIENT_ID` e `OPENSKY_CLIENT_SECRET` il mondo OpenSky resta visibile nel menu ma non chiama l'API: log `not_configured`, nessun accesso anonimo.

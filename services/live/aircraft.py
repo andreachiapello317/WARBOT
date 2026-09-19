@@ -8,8 +8,8 @@ Root REST: https://opensky-network.org/api
 Operazione: GET /states/all
 Bbox: lamin, lomin, lamax, lomax (WGS84, tutti e quattro)
 
-Auth (REST 1.4.0): OAuth2 client credentials, opzionale.
-Senza credenziali → accesso anonimo (risoluzione 10s, 400 crediti/giorno).
+Auth (REST 1.4.0): OAuth2 client credentials via OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET.
+Senza quelle variabili OpenSky non parte: niente accesso anonimo.
 Basic username/password non è più accettato.
 
 OpenSky può bloccare IP di hyperscaler: da alcuni cloud la GET
@@ -24,23 +24,13 @@ import math
 import os
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from services.live.opensky_client import get_opensky_client
 from services.live.osm import LIST_LIMIT, clip, e
 
 log = logging.getLogger("warbot.aircraft")
-
-OPENSKY_ROOT = "https://opensky-network.org/api"
-OPENSKY_STATES = OPENSKY_ROOT + "/states/all"
-OPENSKY_TOKEN_URL = (
-    "https://auth.opensky-network.org/auth/realms/opensky-network"
-    "/protocol/openid-connect/token"
-)
-USER_AGENT = "WARBOT/1.0 (OSM WORLD; OpenSky LIVE; not bulk)"
 
 # Indici state vector OpenSky REST (documentazione ufficiale).
 IDX_ICAO24 = 0
@@ -60,7 +50,6 @@ IDX_GEO_ALTITUDE = 13
 EARTH_RADIUS_KM = 6371.0
 KM_PER_DEG_LAT = 111.32
 MS_TO_KMH = 3.6
-TOKEN_REFRESH_MARGIN = 30
 CACHE_TTL_DEFAULT = 10
 RADIUS_KM_DEFAULT = 50.0
 TIMEOUT_DEFAULT = 12
@@ -69,9 +58,6 @@ MIN_RADIUS_KM = 10.0
 
 _cache_lock = threading.Lock()
 _mem_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-_token_lock = threading.Lock()
-_token: str | None = None
-_token_expires_at = 0.0
 
 
 def _int_env(name: str, default: int, *, lo: int | None = None, hi: int | None = None) -> int:
@@ -324,116 +310,15 @@ def altitude_m(meters: float | None) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Client HTTP OpenSky (anonimo o OAuth2)
+# 4. Client HTTP OpenSky (OAuth2, sessione unica)
 # ---------------------------------------------------------------------------
-
-
-def _oauth_credentials() -> tuple[str, str] | None:
-    """Client id/secret da env. Nessun fallback Basic Auth.
-
-    Accetta i nomi ufficiali OAuth2 e, come alias, OPENSKY_USERNAME/PASSWORD
-    (mappati su client_id/client_secret, non inviati come HTTP Basic).
-    """
-    client_id = (os.getenv("OPENSKY_CLIENT_ID") or os.getenv("OPENSKY_USERNAME") or "").strip()
-    client_secret = (os.getenv("OPENSKY_CLIENT_SECRET") or os.getenv("OPENSKY_PASSWORD") or "").strip()
-    if client_id and client_secret:
-        return client_id, client_secret
-    return None
-
-
-def _fetch_access_token() -> str | None:
-    creds = _oauth_credentials()
-    if not creds:
-        return None
-    client_id, client_secret = creds
-    body = urllib.parse.urlencode(
-        {
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        OPENSKY_TOKEN_URL,
-        data=body,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    token = str(payload.get("access_token") or "").strip()
-    if not token:
-        return None
-    expires_in = int(payload.get("expires_in") or 1800)
-    global _token, _token_expires_at
-    _token = token
-    _token_expires_at = time.time() + max(60, expires_in - TOKEN_REFRESH_MARGIN)
-    return token
-
-
-def _bearer_token(*, force: bool = False) -> str | None:
-    if not _oauth_credentials():
-        return None
-    with _token_lock:
-        if not force and _token and time.time() < _token_expires_at:
-            return _token
-        return _fetch_access_token()
-
-
-def _headers(token: str | None) -> dict[str, str]:
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
-def _http_get(url: str, headers: dict[str, str], timeout: int) -> tuple[int, bytes]:
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return int(resp.status), resp.read()
-    except urllib.error.HTTPError as exc:
-        body = b""
-        try:
-            body = exc.read()
-        except Exception:
-            body = b""
-        return int(exc.code or 0), body
-    except TimeoutError:
-        return 0, b""
-    except urllib.error.URLError as exc:
-        reason = str(exc.reason or exc)
-        if "timed out" in reason.lower() or isinstance(exc.reason, TimeoutError):
-            return 0, b""
-        return -1, b""
-
-
-def _states_url(bbox: tuple[float, float, float, float]) -> str:
-    lamin, lomin, lamax, lomax = bbox
-    query = urllib.parse.urlencode(
-        {
-            "lamin": f"{lamin:.6f}",
-            "lomin": f"{lomin:.6f}",
-            "lamax": f"{lamax:.6f}",
-            "lomax": f"{lomax:.6f}",
-        }
-    )
-    return f"{OPENSKY_STATES}?{query}"
-
-
-def _transient(http: int) -> bool:
-    # Timeout/handshake (0) non si ritenta: OpenSky può scartare IP cloud.
-    # Un solo retry, solo 5xx come da REST.
-    return http in {500, 502, 503, 504}
 
 
 def _error_code(http: int, *, invalid_json: bool = False) -> str:
     if invalid_json:
         return "bad_json"
+    if http == -2:
+        return "not_configured"
     if http == 0:
         return "timeout"
     if http in {401, 403}:
@@ -445,6 +330,15 @@ def _error_code(http: int, *, invalid_json: bool = False) -> str:
     if http < 0:
         return "network"
     return "unavailable"
+
+
+def _request_states(bbox: tuple[float, float, float, float]) -> tuple[int, bytes, bool]:
+    client = get_opensky_client()
+    if not client.configured():
+        log.info("[OPENSKY] not_configured")
+        return -2, b"", False
+    http, body = client.get_states(bbox)
+    return http, body, True
 
 
 def _bundle(
@@ -512,49 +406,6 @@ def _parse_payload(body: bytes) -> tuple[dict[str, Any] | None, bool]:
     return payload, False
 
 
-def _request_states(bbox: tuple[float, float, float, float]) -> tuple[int, bytes, bool]:
-    """Una GET (più eventuale retry token 401 o retry transitorio). Restituisce http, body, used_auth."""
-    url = _states_url(bbox)
-    token = None
-    used_auth = False
-    try:
-        token = _bearer_token()
-        used_auth = token is not None
-    except Exception:
-        log.info("[AIRCRAFT] token_error")
-        token = None
-        used_auth = bool(_oauth_credentials())
-        if used_auth:
-            log.info("[AIRCRAFT] request_start")
-            log.info("[AIRCRAFT] request_end")
-            log.info("[AIRCRAFT] http=401")
-            log.info("[AIRCRAFT] elapsed=0ms")
-            return 401, b"", True
-
-    log.info("[AIRCRAFT] request_start")
-    t0 = time.time()
-    http, body = _http_get(url, _headers(token), TIMEOUT_S)
-    retried = False
-
-    if http == 401 and used_auth:
-        try:
-            token = _bearer_token(force=True)
-        except Exception:
-            token = None
-        if token:
-            http, body = _http_get(url, _headers(token), TIMEOUT_S)
-            retried = True
-
-    if not retried and _transient(http):
-        http, body = _http_get(url, _headers(token), TIMEOUT_S)
-
-    elapsed_ms = int(round((time.time() - t0) * 1000))
-    log.info("[AIRCRAFT] request_end")
-    log.info("[AIRCRAFT] http=%s", http if http > 0 else "000")
-    log.info("[AIRCRAFT] elapsed=%sms", elapsed_ms)
-    return http, body, used_auth
-
-
 def get_aircraft_nearby(
     lat: float,
     lon: float,
@@ -575,9 +426,10 @@ def get_aircraft_nearby(
 
     http, body, _used_auth = _request_states(bbox)
     if http != 200:
-        code = _error_code(http if http > 0 else 0)
+        code = _error_code(http)
         log.info("[AIRCRAFT] states=0")
         log.info("[AIRCRAFT] valid=0")
+        log.info("[AIRCRAFT] error=%s", code)
         return _bundle(ok=False, bbox=bbox, radius_km=radius, http=http, error=code, code=code)
 
     payload, bad_json = _parse_payload(body)
@@ -601,6 +453,7 @@ def get_aircraft_nearby(
     time_unix = _as_int(payload.get("time"))
     log.info("[AIRCRAFT] states=%s", raw_count)
     log.info("[AIRCRAFT] valid=%s", len(planes))
+    log.info("[AIRCRAFT] states_ok")
     result = _bundle(
         ok=True,
         aircraft=planes,
@@ -695,6 +548,11 @@ def error_text(bundle: dict[str, Any], place: dict[str, Any] | None = None) -> s
     title = f"✈️ <b>AEREI LIVE — {e(_place_label(place))}</b>"
     if code == "rate":
         body = "⚠️ OpenSky ha raggiunto il limite di richieste.\nRiprova tra poco."
+    elif code == "not_configured":
+        body = (
+            "⚠️ OpenSky non è configurato.\n"
+            "Imposta OPENSKY_CLIENT_ID e OPENSKY_CLIENT_SECRET nelle variabili d'ambiente."
+        )
     elif code == "auth":
         body = "⚠️ OpenSky ha rifiutato l'accesso.\nRiprova tra poco."
     elif code == "timeout":

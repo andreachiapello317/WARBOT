@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from services.live.aircraft import get_aircraft_nearby
+from worlds.opensky.service import get_aircraft_in_bbox
 
 # Query realmente supportate da OpenSky REST (state vectors in bbox).
 # /flights/arrival e /flights/departure richiedono ICAO aeroporto, non lat/lon città:
@@ -49,7 +49,7 @@ def get_query(query_id: str | None) -> dict[str, Any] | None:
 def run_aircraft(city: dict[str, Any], query_id: str = "aircraft") -> dict[str, Any]:
     meta = get_query(query_id) or BY_ID["aircraft"]
     radius = meta.get("radius_km")
-    bundle = get_aircraft_nearby(float(city["lat"]), float(city["lon"]), radius)
+    bundle = get_aircraft_in_bbox(float(city["lat"]), float(city["lon"]), radius)
     bundle["query"] = meta["id"]
     bundle["mode"] = meta["mode"]
     bundle["title"] = meta["title"]
