@@ -307,7 +307,15 @@ def _gallery_html(rows: list[dict]) -> str:
         href = h(row.get("url") or row.get("thumb") or "#")
         title = h(row.get("title") or "")
         credit = h(row.get("credit") or row.get("source") or "")
+        date = h(row.get("date") or "")
+        if date:
+            credit = f"{credit} · {date}" if credit else date
         img = f'<img src="{src}" alt="{title}"/>' if src else ""
+        if not src:
+            bits.append(
+                f'<a href="{href}" target="_blank" rel="noopener"><span><b>{title}</b><br>{credit}</span></a>'
+            )
+            continue
         bits.append(f'<a href="{href}" target="_blank" rel="noopener">{img}<span>{title}<br>{credit}</span></a>')
     return f'<div class="gallery">{"".join(bits)}</div>'
 

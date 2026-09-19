@@ -338,24 +338,26 @@ def gallery_for(query: str, *, limit: int = 10, era_id: str | None = None, flavo
     chunks: list[list[dict[str, Any]]] = []
     if era_id in {"spa", "dig"} or "space" in query.lower() or "apollo" in query.lower():
         chunks.append(nasa_items(query, limit=max(4, limit // 2)))
-    if flavor == "doc" or era_id in {"ww1", "ww2", "int", "cold", "mod"}:
+    if flavor == "doc":
         chunks.append(tna_items(query, limit=max(4, limit // 2)))
         chunks.append(archive_items(query, limit=4))
+        chunks.append(catalogue_doors(query, era_id=era_id or ""))
     chunks.append(loc_items(query, limit=max(4, limit // 2)))
     chunks.append(europeana_items(query, limit=4))
     chunks.append(smithsonian_items(query, limit=4))
     chunks.append(dpla_items(query, limit=4))
     if flavor != "doc":
         chunks.append(commons_images(query, limit=max(3, limit // 3)))
-    if flavor == "doc":
-        chunks.append(archive_items(query, limit=4))
-        chunks.append(catalogue_doors(query, era_id=era_id or ""))
+        if era_id in {"ww1", "ww2", "int", "cold"}:
+            chunks.append(archive_items(query, limit=4))
     rows: list[dict[str, Any]] = []
     seen = set()
     for chunk in chunks:
         for item in chunk:
             url = item.get("url") or item.get("thumb")
             if not url or url in seen:
+                continue
+            if flavor == "img" and not item.get("thumb"):
                 continue
             seen.add(url)
             rows.append(item)
