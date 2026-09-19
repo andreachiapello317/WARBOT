@@ -70,7 +70,7 @@ WORLDS = {
     "epoche": {
         "emoji": "⚔️",
         "title": "EPOCHE",
-        "blurb": "Guerre storiche, dall'antichità al Novecento.",
+        "blurb": "Schede curate di storia, con fonti d'archivio.",
         "kinds": ("war",),
     },
     "campi": {

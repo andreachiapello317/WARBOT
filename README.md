@@ -8,20 +8,28 @@ Non è un manuale operativo. I testi descrivono guerre, eserciti, mezzi e tratta
 
 | Mondo | Cosa contiene |
 | --- | --- |
-| ⚔️ **Epoche** | Guerre storiche per era (antichità → contemporanea) |
+| ⚔️ **Epoche** | Enciclopedia curata + archivi (IWM, LoC, NASA…). Wikidata solo come grafo |
 | 🗺️ **Campi** | Battaglie: date, forze, fasi narrative, conseguenze |
 | 🪖 **Truppe** | Ruoli (fanteria, genio, medici…) e scala dei gradi |
 | 🏳️ **Bandiere** | Forze armate (Italia, Francia, UK, USA, Roma, NATO) |
 | ⚙️ **Ferro** | Equipaggiamento, mezzi, fortificazioni, spazio militare |
 | 🕊️ **Patti** | Trattati, pace, personaggi, strategia come storia |
 
-## Epoche (timeline viva)
+## Epoche (enciclopedia con fonti)
 
-Non sono più solo le schede statiche. **🌍 Epoche** apre diciotto ere (Preistoria → era digitale). Per ognuna: panoramica Wikipedia/Wikidata, timeline, guerre, personaggi, luoghi, soldati, tecnologia, galleria (Commons + Library of Congress, Europeana se `EUROPEANA_API_KEY`).
+**🌍 Epoche** non pesca più le schede da Wikidata. Il database interno WARBOT contiene le sale (cronologia, civiltà, guerre, eserciti, personaggi, territori, città, scienza, arte, letteratura, religioni, economia, tecnologia, trasporti, architettura, luoghi). Ogni scheda porta:
 
-Una sola scheda per Q-id Wikidata: Napoleone non si duplica tra moduli. **🎲 Viaggia nel tempo** (`/viaggia`) pesca anno, evento, persone, immagine.
+- 📚 fonte istituzionale
+- 📅 data
+- 🔗 link all'originale o al catalogo
 
-Le 85 schede del cassetto restano sotto **📚 Cassetto del museo**. Campi, Truppe, Bandiere, Ferro, Patti non sono toccati.
+Le API **arricchiscono** immagini e documenti: Library of Congress, Internet Archive, The National Archives (UK), NASA Images, Europeana / Smithsonian / DPLA se hai la chiave. Imperial War Museums e British Museum, senza JSON pubblico stabile, restano come porte di catalogo citate in chiaro.
+
+Wikidata è solo il **grafo** (bottone «Grafo Wikidata»): un Q-id, non il testo della scheda.
+
+**🎲 Viaggia nel tempo** (`/viaggia`) pesca un anno dalle schede curate.
+
+Le 85 schede statiche restano sotto **📚 Cassetto del museo**.
 
 ## Live (aerei, navi, ISS)
 
@@ -46,7 +54,7 @@ ui/texts.py         Testi di interfaccia
 services/           Schede per mondo + ricerca + quiz + live ADS-B/AIS
 ```
 
-Callback come nel bot a mondi: `world:epoche`, `e:stlg`, `l:war:ant`, `q:bat`, `nav:back`, `home:menu`.
+Callback come nel bot a mondi: `world:epoche`, `era:ww2:war`, `hc:ww2-stl`, `e:stlg`, `l:war:ant`, `q:bat`, `nav:back`, `home:menu`.
 
 ## Avvio locale
 
@@ -78,8 +86,8 @@ Senza `WEBHOOK_URL` parte in **polling**. In produzione (Render) imposta `WEBHOO
 ```
 start - I sei mondi del museo
 esplora - Mappa dei mondi
-epoche - Timeline storica da archivi pubblici
-viaggia - Un anno e un evento a caso
+epoche - Enciclopedia delle ere, con fonti
+viaggia - Un anno e una scheda curata a caso
 campi - Battaglie
 truppe - Soldati e gradi
 bandiere - Forze armate

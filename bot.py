@@ -43,6 +43,7 @@ from services.catalog import (
     random_item,
     search,
 )
+from services.history.corpus import search_cards
 from services.history.engine import (
     entity_card,
     format_entity,
@@ -52,13 +53,14 @@ from services.history.engine import (
     format_overview,
     format_timeline,
     format_travel,
-    gallery,
+    graph_card,
     list_for,
     overview,
     timeline,
     travel,
 )
 from services.history.eras import ERAS
+from services.history.pack import FACET_TITLE
 from services.live import (
     REGIONS,
     fetch_aircraft,
@@ -87,8 +89,10 @@ from ui.keyboards import (
     quiz_hub_keyboard,
     quiz_options_keyboard,
     rank_scale_keyboard,
+    hc_card_keyboard,
+    hc_list_keyboard,
+    mixed_search_keyboard,
     wd_card_keyboard,
-    wd_list_keyboard,
     world_keyboard,
 )
 from ui.texts import (
@@ -428,8 +432,11 @@ async def open_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token: 
     if prefix == "era":
         await open_era(update, context, action, extra)
         return
-    if prefix == "wd" and action:
-        await show_wd(update, context, action)
+    if prefix == "wd" and rest:
+        await show_wd(update, context, rest)
+        return
+    if prefix == "hc" and rest:
+        await show_history_card(update, context, rest)
         return
     if prefix == "h" and action == "go":
         await show_travel(update, context, None)
@@ -561,47 +568,64 @@ async def show_era_hub(update: Update, context: ContextTypes.DEFAULT_TYPE, eid: 
         await reply_html(update, context, "Epoca non in mappa.", reply_markup=era_index_keyboard())
         return
     _era_here(context, eid)
-    await reply_html(
-        update,
-        context,
-        "🌍 <b>EPOCHE</b>\n\nApro gli archivi (Wikidata, Wikipedia)…",
-        reply_markup=era_hub_keyboard(eid),
-    )
+    data = overview(eid, fetch_media=False)
+    await reply_html(update, context, format_overview(data), reply_markup=era_hub_keyboard(eid), preview=True)
     data = await asyncio.to_thread(overview, eid)
+    await reply_html(update, context, format_overview(data), reply_markup=era_hub_keyboard(eid), preview=True)
+
+
+async def show_history_card(update: Update, context: ContextTypes.DEFAULT_TYPE, cid: str) -> None:
+    data = entity_card(cid, fetch_media=False)
+    if not data:
+        await reply_html(update, context, "Scheda assente nel database WARBOT.", reply_markup=era_index_keyboard())
+        return
+    era = data.get("era") or {}
+    eid = era.get("id")
+    if eid:
+        _era_here(context, eid)
     await reply_html(
         update,
         context,
-        format_overview(data),
-        reply_markup=era_hub_keyboard(eid),
+        format_entity(data),
+        reply_markup=hc_card_keyboard(data["item"], data.get("related") or [], eid),
         preview=True,
     )
+    data = await asyncio.to_thread(entity_card, cid)
+    if data:
+        await reply_html(
+            update,
+            context,
+            format_entity(data),
+            reply_markup=hc_card_keyboard(data["item"], data.get("related") or [], eid),
+            preview=True,
+        )
 
 
 async def show_wd(update: Update, context: ContextTypes.DEFAULT_TYPE, qid: str) -> None:
-    await reply_html(update, context, "📖 Apro la scheda Wikidata…", reply_markup=back_home_keyboard())
-    data = await asyncio.to_thread(entity_card, qid)
+    await reply_html(update, context, "🔗 Apro il grafo Wikidata (anagrafe, non la scheda)…", reply_markup=back_home_keyboard())
+    data = await asyncio.to_thread(graph_card, qid)
     if not data:
-        await reply_html(update, context, "Questa entità non è arrivata da Wikidata.", reply_markup=era_index_keyboard())
+        await reply_html(update, context, "Wikidata non ha risposto. Torna alla scheda WARBOT.", reply_markup=era_index_keyboard())
         return
     eid = _era_here(context)
     await reply_html(
         update,
         context,
         format_entity(data),
-        reply_markup=wd_card_keyboard(data["item"], data.get("related") or [], eid),
+        reply_markup=wd_card_keyboard(data["item"], [], eid),
         preview=True,
     )
 
 
 async def show_travel(update: Update, context: ContextTypes.DEFAULT_TYPE, eid: str | None) -> None:
-    await reply_html(update, context, "🎲 <b>VIAGGIA NEL TEMPO</b>\n\nScelgo un anno…", reply_markup=back_home_keyboard())
+    await reply_html(update, context, "🎲 <b>VIAGGIA NEL TEMPO</b>\n\nPesca una scheda del museo…", reply_markup=back_home_keyboard())
     data = await asyncio.to_thread(travel, eid)
     era_id = (data.get("era") or {}).get("id")
     if era_id:
         _era_here(context, era_id)
     event = data.get("event") or {}
     related = data.get("people") or []
-    markup = wd_card_keyboard(event, related, era_id) if event.get("id") else era_hub_keyboard(era_id or "ww2")
+    markup = hc_card_keyboard(event, related, era_id) if event.get("id") else era_hub_keyboard(era_id or "ww2")
     await reply_html(update, context, format_travel(data), reply_markup=markup, preview=True)
 
 
@@ -613,47 +637,41 @@ async def open_era(update: Update, context: ContextTypes.DEFAULT_TYPE, action: s
         await reply_html(update, context, "Epoca non in mappa.", reply_markup=era_index_keyboard())
         return
     _era_here(context, action)
+    extra = {"sld": "arm", "bat": "war"}.get(extra, extra)
     if extra in {"", "hub", "ov"}:
         await show_era_hub(update, context, action)
         return
     if extra == "go":
         await show_travel(update, context, action)
         return
-    headings = {
-        "tl": "Timeline",
-        "war": "Guerre e campagne",
-        "bat": "Battaglie",
-        "ppl": "Personaggi",
-        "plc": "Luoghi",
-        "sld": "Soldati e uniformi",
-        "tec": "Tecnologia",
-        "img": "Immagini",
-        "doc": "Documenti",
-    }
-    if extra not in headings:
+    heading = FACET_TITLE.get(extra)
+    if not heading:
         await show_era_hub(update, context, action)
         return
-    await reply_html(
-        update,
-        context,
-        f"{ERAS[action]['emoji']} <b>{ERAS[action]['title']}</b>\n\nInterrogo gli archivi…",
-        reply_markup=era_hub_keyboard(action),
-    )
+    if extra in {"img", "doc"}:
+        await reply_html(
+            update,
+            context,
+            f"{ERAS[action]['emoji']} <b>{ERAS[action]['title']}</b>\n\nInterrogo gli archivi pubblici…",
+            reply_markup=era_hub_keyboard(action),
+        )
+        data = await asyncio.to_thread(list_for, action, extra)
+        text = format_gallery(data, heading)
+        await reply_html(update, context, text, reply_markup=era_hub_keyboard(action), preview=True)
+        return
     if extra == "tl":
-        data = await asyncio.to_thread(timeline, action)
+        data = timeline(action)
         text = format_timeline(data)
-        rows = []
+        rows: list[dict] = []
         for _year, chunk in data.get("years") or []:
             rows.extend(chunk)
-        markup = wd_list_keyboard(rows, action) if rows else era_hub_keyboard(action)
-    elif extra in {"sld", "tec", "img", "doc"}:
-        data = await asyncio.to_thread(gallery, action, flavor=extra)
-        text = format_gallery(data, headings[extra])
-        markup = era_hub_keyboard(action)
-    else:
-        data = await asyncio.to_thread(list_for, action, extra)
-        text = format_era_list(data, headings[extra])
-        markup = wd_list_keyboard(data.get("rows") or [], action)
+        markup = hc_list_keyboard(rows, action) if rows else era_hub_keyboard(action)
+        await reply_html(update, context, text, reply_markup=markup, preview=True)
+        return
+    data = list_for(action, extra)
+    text = format_era_list(data, heading)
+    rows = data.get("rows") or []
+    markup = hc_list_keyboard(rows, action) if rows else era_hub_keyboard(action)
     await reply_html(update, context, text, reply_markup=markup, preview=True)
 
 
@@ -782,7 +800,26 @@ async def cmd_iss(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def receive_search(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     context.user_data[SEARCH_KEY] = False
     rows = search(text)
-    await reply_html(update, context, format_search(text, rows), reply_markup=list_keyboard(rows))
+    hist = search_cards(text)
+    if hist and not rows:
+        from services.history.engine import format_search_hits
+
+        await reply_html(
+            update,
+            context,
+            format_search_hits(text, hist),
+            reply_markup=mixed_search_keyboard([], hist),
+        )
+        return
+    extra = ""
+    if hist:
+        extra = "\n\n🌍 <b>EPOCHE</b> ha anche " + str(len(hist)) + " schede curate."
+    await reply_html(
+        update,
+        context,
+        format_search(text, rows) + extra,
+        reply_markup=mixed_search_keyboard(rows, hist),
+    )
 
 
 async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -932,6 +969,7 @@ def build_application(token: str) -> Application:
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^live:"))
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^era:"))
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^wd:"))
+    application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^hc:"))
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^h:"))
     application.add_handler(CallbackQueryHandler(on_entity_action, pattern=r"^(e|s|l|rnd):"))
     application.add_handler(CallbackQueryHandler(on_quiz_tap, pattern=r"^q"))

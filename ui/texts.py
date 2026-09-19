@@ -11,7 +11,7 @@ def home_text() -> str:
         "Sei mondi, un filo: capire guerre, eserciti e pace senza trasformarli in un manuale.\n\n"
         "📡 <b>POSIZIONI LIVE</b> — il bottone in cima. Aerei, navi, ISS: coordinate vere, adesso.\n"
         "Comando: /live\n\n"
-        "⚔️ <b>EPOCHE</b> — guerre storiche, dall'antichità al Novecento\n"
+        "⚔️ <b>EPOCHE</b> — enciclopedia curata, dall'antichità allo spazio, con fonti\n"
         "🗺️ <b>CAMPI</b> — battaglie, fasi, conseguenze\n"
         "🪖 <b>TRUPPE</b> — ruoli del soldato e gradi\n"
         "🏳️ <b>BANDIERE</b> — forze armate e alleanze\n"
@@ -42,7 +42,7 @@ def esplora_text() -> str:
 def world_text(key: str) -> str:
     meta = WORLDS[key]
     extra = {
-        "epoche": "Diciotto ere, una timeline viva. Guerre, persone, luoghi e immagini da Wikidata e dai musei.",
+        "epoche": "Diciotto ere, schede curate, archivi (IWM, LoC, NASA…). Wikidata solo come grafo.",
         "campi": "Ogni battaglia ha data, luogo, forze, fasi narrative, comandanti, memoria.",
         "truppe": "Ruoli storici (fante, genio, medico…) e scala dei gradi, con confronti.",
         "bandiere": "Schede pubbliche: storia, organizzazione generale, tradizioni, missioni note.",
@@ -81,7 +81,7 @@ def help_text() -> str:
         "📚 <b>Manuale del museo</b>\n\n"
         "/start — i sei mondi\n"
         "/esplora — mappa dei mondi\n"
-        "/epoche — timeline storica (Wikidata, musei, viaggia nel tempo)\n"
+        "/epoche — timeline curata (archivi, non un dump Wikidata)\n"
         "/viaggia — un anno, un evento, un luogo a caso\n"
         "/campi — battaglie\n"
         "/truppe — soldati e gradi\n"

@@ -24,12 +24,15 @@ from services.catalog import (
 from services.history.engine import (
     entity_card,
     gallery,
+    graph_card,
     list_for,
     overview,
     timeline,
     travel,
 )
+from services.history.corpus import search_cards
 from services.history.eras import ERAS, all_eras
+from services.history.pack import FACETS
 from services.live import (
     LIVE_NOTE,
     REGIONS,
@@ -153,7 +156,11 @@ def layout(title: str, body: str, *, lead: str = "", extra_head: str = "", extra
       text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top;
     }}
     .live-table th {{ color:var(--brass); font-size:.82rem; letter-spacing:.04em; text-transform:uppercase; }}
-    .tabs {{ display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }}
+    .src {{
+      font-size:.92rem; color:var(--muted); border-left:3px solid var(--brass);
+      padding:10px 14px; margin:16px 0; background:#0002; border-radius:0 10px 10px 0;
+    }}
+    .src a {{ margin-right:10px; }}
     @media (max-width:640px) {{
       .top {{ padding:12px; }}
       .brand {{ width:100%; }}
@@ -222,8 +229,8 @@ def render_world(key: str) -> str:
         )
         body = (
             f"<h1>{meta['emoji']} {h(meta['title'])}</h1>"
-            "<p class='lead'>Diciotto ere. Timeline, personaggi, luoghi e immagini da Wikidata, "
-            "Wikipedia, Commons e Library of Congress.</p>"
+            "<p class='lead'>Diciotto ere. Schede curate WARBOT, arricchite da musei e archivi. "
+            "Wikidata è solo un grafo, non la fonte della sala.</p>"
             + extra
             + f"<div class='grid'>{tiles}</div>"
         )
@@ -237,15 +244,33 @@ def render_world(key: str) -> str:
     return layout(meta["title"], body)
 
 
+FACET_SLUG = {
+    "tl": "cronologia",
+    "civ": "civilta",
+    "war": "guerre",
+    "arm": "eserciti",
+    "ppl": "persone",
+    "ter": "territori",
+    "cty": "citta",
+    "sci": "scienza",
+    "art": "arte",
+    "lit": "letteratura",
+    "rel": "religioni",
+    "eco": "economia",
+    "tec": "tecnologia",
+    "trn": "trasporti",
+    "arc": "architettura",
+    "plc": "luoghi",
+    "doc": "documenti",
+    "img": "immagini",
+}
+SLUG_FACET = {slug: key for key, slug in FACET_SLUG.items()}
+SLUG_FACET.update({"timeline": "tl", "soldati": "arm", "battaglie": "war", "tecnologia": "tec"})
+
+
 def _era_nav(eid: str, active: str = "ov") -> str:
-    links = [
-        ("ov", f"/era/{eid}", "🌍 Panoramica"),
-        ("tl", f"/era/{eid}/timeline", "⏳ Timeline"),
-        ("war", f"/era/{eid}/guerre", "⚔️ Guerre"),
-        ("ppl", f"/era/{eid}/persone", "👤 Personaggi"),
-        ("img", f"/era/{eid}/immagini", "📸 Immagini"),
-        ("doc", f"/era/{eid}/documenti", "📜 Documenti"),
-    ]
+    links = [("ov", f"/era/{eid}", "🌍 Panoramica")]
+    links += [(key, f"/era/{eid}/{FACET_SLUG[key]}", f"{emoji} {title}") for key, emoji, title in FACETS]
     chips = []
     for key, href, label in links:
         style = "border-color:var(--brass)" if key == active else ""
@@ -253,6 +278,24 @@ def _era_nav(eid: str, active: str = "ov") -> str:
     chips.append('<a class="chip" href="/w/epoche">🌍 Tutte le epoche</a>')
     chips.append('<a class="chip" href="/viaggia">🎲 Viaggia</a>')
     return f'<div class="tabs">{"".join(chips)}</div>'
+
+
+def _source_box(sources: list, *, url: str = "", years: str = "") -> str:
+    bits = []
+    if years:
+        bits.append(f"<div>📅 Data: {h(years)}</div>")
+    names = [s.get("name") or s.get("id") for s in sources or [] if s.get("kind") != "graph"]
+    if names:
+        bits.append("<div>📚 Fonte: " + " · ".join(h(n) for n in names[:4]) + "</div>")
+    if url:
+        bits.append(f'<div>🔗 <a href="{h(url)}" target="_blank" rel="noopener">Fonte originale</a></div>')
+    elif sources:
+        href = (sources[0] or {}).get("url") or ""
+        if href:
+            bits.append(f'<div>🔗 <a href="{h(href)}" target="_blank" rel="noopener">Catalogo {h(sources[0].get("name") or "")}</a></div>')
+    if not bits:
+        return ""
+    return f'<div class="src">{"".join(bits)}</div>'
 
 
 def _gallery_html(rows: list[dict]) -> str:
@@ -278,112 +321,133 @@ def render_era(eid: str, view: str = "ov") -> str:
         blocks = []
         for year, rows in data.get("years") or []:
             items = "".join(
-                f'<li><a href="/wd/{h(r["id"])}">{h(r["label"])}</a> {h(r.get("span") or "")}</li>'
+                f'<li><a href="/hc/{h(r["id"])}">{h(r["title"])}</a> · {h(r.get("years") or "")}</li>'
                 for r in rows
             )
             blocks.append(f"<h3>{h(year)}</h3><ul>{items}</ul>")
         body = (
-            f"<h1>{era['emoji']} {h(era['title'])} · Timeline</h1>"
+            f"<h1>{era['emoji']} {h(era['title'])} · Cronologia</h1>"
             + _era_nav(eid, "tl")
-            + ("".join(blocks) or "<p>Nessuna data strutturata.</p>")
+            + "<p class='lead'>Eventi dalle schede WARBOT, ciascuno con fonte.</p>"
+            + ("".join(blocks) or "<p>Nessuna data in questa sala.</p>")
         )
-        return layout(f"Timeline · {era['title']}", body)
-    if view in {"war", "ppl", "bat", "plc"}:
+        return layout(f"Cronologia · {era['title']}", body)
+    if view in {"img", "doc"}:
+        data = gallery(eid, flavor=view)
+        title = "Immagini" if view == "img" else "Documenti"
+        curated = "".join(
+            f'<a class="card" href="/hc/{h(r["id"])}"><h2>{h(r["title"])}</h2><p>{h(r.get("years") or "")}</p></a>'
+            for r in data.get("curated") or []
+        )
+        body = (
+            f"<h1>{era['emoji']} {h(era['title'])} · {title}</h1>"
+            + _era_nav(eid, view)
+            + "<p class='lead'>Archivi pubblici. Ogni pezzo porta fonte, data se c'è, e link originale. "
+            "IWM e British Museum, senza API aperta, restano come porte di catalogo.</p>"
+            + (f"<h3>Schede WARBOT</h3><div class='grid'>{curated}</div>" if curated else "")
+            + _gallery_html(data.get("rows") or [])
+        )
+        return layout(f"{title} · {era['title']}", body)
+    if view != "ov":
         data = list_for(eid, view)
+        facet = next((t for k, _e, t in FACETS if k == view), view)
         tiles = "".join(
-            f'<a class="card" href="/wd/{h(r["id"])}"><h2>{h(r["label"])}</h2><p>{h(r.get("span") or r.get("desc") or "")}</p></a>'
+            f'<a class="card" href="/hc/{h(r["id"])}"><h2>{r.get("emoji", "📖")} {h(r["title"])}</h2>'
+            f'<p>{h(r.get("years") or "")}</p></a>'
             for r in data.get("rows") or []
         )
-        title = {"war": "Guerre", "ppl": "Personaggi", "bat": "Battaglie", "plc": "Luoghi"}[view]
+        empty = "<p>Sala ancora magra: apri Documenti o Immagini per gli archivi, o un'altra epoca.</p>"
         body = (
-            f"<h1>{era['emoji']} {h(era['title'])} · {title}</h1>"
-            + _era_nav(eid, "ppl" if view == "ppl" else "war")
-            + (f"<div class='grid'>{tiles}</div>" if tiles else "<p>Nessuna entità collegata in questo istante.</p>")
+            f"<h1>{era['emoji']} {h(era['title'])} · {h(facet)}</h1>"
+            + _era_nav(eid, view)
+            + (f"<div class='grid'>{tiles}</div>" if tiles else empty)
         )
-        return layout(f"{title} · {era['title']}", body)
-    if view in {"img", "doc", "sld", "tec"}:
-        data = gallery(eid, flavor=view)
-        title = {"img": "Immagini", "doc": "Documenti", "sld": "Soldati", "tec": "Tecnologia"}[view]
-        body = (
-            f"<h1>{era['emoji']} {h(era['title'])} · {title}</h1>"
-            + _era_nav(eid, "img" if view != "doc" else "doc")
-            + _gallery_html(data.get("rows") or [])
-            + "<p class='lead'>Commons, Library of Congress"
-            + (" e Europeana" if data.get("rows") and any(r.get("source") == "Europeana" for r in data["rows"]) else "")
-            + ".</p>"
-        )
-        return layout(f"{title} · {era['title']}", body)
-    data = overview(eid)
-    hub = data.get("hub") or {}
-    wiki = data.get("wiki") or {}
-    img = data.get("image") or ""
-    hero = f'<p><img src="{h(img)}" alt="" style="max-width:100%;border-radius:14px;border:1px solid var(--line)"/></p>' if img else ""
-    links = (
-        f'<p class="meta"><a class="chip" href="/wd/{h(era["qid"])}">Wikidata {h(era["qid"])}</a>'
-        + (f'<a class="chip" href="{h(wiki["url"])}">Wikipedia</a>' if wiki.get("url") else "")
-        + "</p>"
+        return layout(f"{facet} · {era['title']}", body)
+    data = overview(eid, fetch_media=False)
+    img = data.get("image") or {}
+    thumb = img.get("thumb") or img.get("url") or ""
+    hero = (
+        f'<p><img src="{h(thumb)}" alt="" style="max-width:100%;border-radius:14px;border:1px solid var(--line)"/></p>'
+        if thumb
+        else ""
+    )
+    rooms = "".join(
+        f'<a class="card" href="/era/{h(eid)}/{FACET_SLUG[key]}"><h2>{emoji} {h(title)}</h2>'
+        f'<p>{(data.get("counts") or {}).get(key, 0)} schede</p></a>'
+        for key, emoji, title in FACETS
+        if key not in {"img", "doc"}
+    )
+    rooms += (
+        f'<a class="card" href="/era/{h(eid)}/immagini"><h2>📸 Immagini</h2><p>Archivi pubblici.</p></a>'
+        f'<a class="card" href="/era/{h(eid)}/documenti"><h2>📜 Documenti</h2><p>Cataloghi e originali.</p></a>'
     )
     body = (
         f"<h1>{era['emoji']} {h(era['title'])}</h1>"
-        f"<p class='lead'>📅 {h(hub.get('span') or era['years'])}</p>"
+        f"<p class='lead'>📅 {h(era['years'])}</p>"
         + _era_nav(eid, "ov")
         + hero
-        + f"<p class='lead'>{h(data.get('extract') or '')}</p>"
-        + links
-        + '<div class="grid">'
-        f'<a class="card" href="/era/{h(eid)}/timeline"><h2>⏳ Timeline</h2><p>Eventi datati da Wikidata.</p></a>'
-        f'<a class="card" href="/era/{h(eid)}/guerre"><h2>⚔️ Guerre</h2><p>Campagne e conflitti collegati.</p></a>'
-        f'<a class="card" href="/era/{h(eid)}/persone"><h2>👤 Personaggi</h2><p>Persone, non copie duplicate.</p></a>'
-        f'<a class="card" href="/era/{h(eid)}/immagini"><h2>📸 Galleria</h2><p>Foto e oggetti di istituzioni.</p></a>'
-        "</div>"
+        + f"<p class='lead'>{h(data.get('essay') or '')}</p>"
+        + _source_box(data.get("sources") or [], years=era["years"])
+        + f'<div class="grid">{rooms}</div>'
     )
     return layout(era["title"], body)
 
 
-def render_wd(qid: str) -> str:
-    data = entity_card(qid)
+def render_hc(cid: str) -> str:
+    data = entity_card(cid, fetch_media=False)
     if not data:
-        return layout("Scheda assente", "<h1>Wikidata non ha risposto</h1><p><a href='/w/epoche'>Epoche</a></p>")
+        return layout("Scheda assente", "<h1>Scheda assente nel database WARBOT</h1><p><a href='/w/epoche'>Epoche</a></p>")
     item = data["item"]
-    wiki = data.get("wiki") or {}
-    img = item.get("image") or (wiki.get("image") or "")
-    hero = f'<p><img src="{h(img)}" alt="" style="max-width:100%;border-radius:14px;border:1px solid var(--line)"/></p>' if img else ""
+    era = data.get("era") or {}
     rel = "".join(
-        f'<a class="card" href="/wd/{h(r["id"])}"><h2>{h(r["label"])}</h2><p>{h(r.get("desc") or r.get("span") or "")}</p></a>'
+        f'<a class="card" href="/hc/{h(r["id"])}"><h2>{r.get("emoji", "📖")} {h(r["title"])}</h2><p>{h(r.get("years") or "")}</p></a>'
         for r in data.get("related") or []
     )
+    qid = item.get("qid") or ""
+    graph = f'<a class="chip" href="/wd/{h(qid)}">Grafo Wikidata {h(qid)}</a>' if qid else ""
     body = (
-        f"<h1>{h(item['label'])}</h1>"
-        f"<p class='lead'>{h(item.get('span') or '')} · {h(item['id'])}</p>"
-        + hero
-        + f"<p class='lead'>{h((wiki.get('extract') or item.get('desc') or ''))}</p>"
-        + f'<p class="meta"><a class="chip" href="{h(item["url"])}">Wikidata</a>'
-        + (f'<a class="chip" href="{h(wiki["url"])}">Wikipedia</a>' if wiki.get("url") else "")
-        + '<a class="chip" href="/w/epoche">🌍 Epoche</a></p>'
-        + (f"<h3>Collegamenti</h3><div class='grid'>{rel}</div>" if rel else "")
+        f"<h1>{item.get('emoji', '📖')} {h(item['title'])}</h1>"
+        f"<p class='lead'>{h(item.get('kind_title') or '')} · {h((era or {}).get('title') or '')} · {h(item.get('years') or '')}</p>"
+        + ( _era_nav(era["id"], item.get("kind") or "ov") if era.get("id") else "" )
+        + f"<p class='lead'>{h(item.get('summary') or '')}</p>"
+        + _source_box(item.get("sources") or [], url=item.get("url") or "", years=item.get("years") or "")
+        + f'<p class="meta">{graph}<a class="chip" href="/era/{h(era.get("id") or "")}">Apri l\'epoca</a></p>'
+        + (f"<h3>Nella stessa sala</h3><div class='grid'>{rel}</div>" if rel else "")
     )
-    return layout(item["label"], body)
+    return layout(item["title"], body)
+
+
+def render_wd(qid: str) -> str:
+    data = graph_card(qid)
+    if not data:
+        return layout("Grafo assente", "<h1>Wikidata non ha risposto</h1><p>È solo un collegamento anagrafico. <a href='/w/epoche'>Epoche</a></p>")
+    item = data["item"]
+    body = (
+        f"<h1>🔗 Grafo · {h(item.get('label') or qid)}</h1>"
+        f"<p class='lead'>Collegamento Wikidata, non la scheda enciclopedica WARBOT.</p>"
+        f"<p class='lead'>{h(item.get('desc') or '')}</p>"
+        f'<p class="meta"><a class="chip" href="{h(item.get("url") or "#")}">Apri Wikidata</a>'
+        '<a class="chip" href="/w/epoche">🌍 Epoche</a></p>'
+    )
+    return layout(item.get("label") or qid, body)
 
 
 def render_viaggia() -> str:
-    data = travel()
+    data = travel(fetch_media=False)
     era = data["era"]
     event = data.get("event") or {}
-    wiki = data.get("wiki") or {}
-    img = (data.get("image") or {}).get("thumb") or (data.get("image") or {}).get("url") or ""
-    hero = f'<p><img src="{h(img)}" alt="" style="max-width:100%;border-radius:14px;border:1px solid var(--line)"/></p>' if img else ""
     people = "".join(
-        f'<a class="chip" href="/wd/{h(p["id"])}">{h(p["label"])}</a>' for p in data.get("people") or []
+        f'<a class="chip" href="/hc/{h(p["id"])}">{h(p["title"])}</a>' for p in data.get("people") or []
     )
-    qid = event.get("id") or era["qid"]
+    cid = event.get("id") or ""
     body = (
         "<h1>🎲 Viaggia nel tempo</h1>"
-        f"<p class='lead'>🕰️ {h(event.get('start') or era['start'])} · {era['emoji']} {h(era['title'])}<br>"
-        f"⚔️ {h(event.get('label') or era['title'])}</p>"
-        + hero
-        + f"<p class='lead'>{h((wiki.get('extract') or event.get('desc') or ''))}</p>"
+        f"<p class='lead'>🕰️ {h(event.get('years') or event.get('start') or era['start'])} · {era['emoji']} {h(era['title'])}<br>"
+        f"⚔️ {h(event.get('title') or era['title'])}</p>"
+        + f"<p class='lead'>{h(event.get('summary') or '')}</p>"
+        + _source_box(event.get("sources") or [], url=event.get("url") or "", years=event.get("years") or "")
         + f'<p class="meta">{people}</p>'
-        + f'<p class="meta"><a class="chip" href="/wd/{h(qid)}">Scheda</a> '
+        + f'<p class="meta"><a class="chip" href="/hc/{h(cid)}">Scheda WARBOT</a> '
         f'<a class="chip" href="/era/{h(era["id"])}">Apri l\'epoca</a> '
         f'<a class="chip" href="/viaggia">Un altro viaggio</a></p>'
     )
@@ -447,8 +511,16 @@ def render_cerca(q: str) -> str:
     if not q:
         return layout("Cerca", form + telegramish(cerca_text()))
     rows = search(q)
-    tiles = "".join(card_tile(item) for item in rows) or "<p>Nessuna scheda.</p>"
-    body = form + telegramish(format_search(q, rows).replace("<b>", "").replace("</b>", "")) + f"<div class='grid'>{tiles}</div>"
+    hist = search_cards(q)
+    tiles = "".join(card_tile(item) for item in rows)
+    hist_tiles = "".join(
+        f'<a class="card" href="/hc/{h(r["id"])}"><h2>{r.get("emoji", "📖")} {h(r["title"])}</h2><p>{h(r.get("years") or "EPOCHE")}</p></a>'
+        for r in hist
+    )
+    if not tiles and not hist_tiles:
+        tiles = "<p>Nessuna scheda.</p>"
+    extra = f"<h3>Database EPOCHE</h3><div class='grid'>{hist_tiles}</div>" if hist_tiles else ""
+    body = form + telegramish(format_search(q, rows).replace("<b>", "").replace("</b>", "")) + f"<div class='grid'>{tiles}</div>" + extra
     return layout(f"Cerca · {q}", body)
 
 
@@ -934,12 +1006,9 @@ class Handler(BaseHTTPRequestHandler):
                 parts = [p for p in path.split("/") if p]
                 eid = parts[1] if len(parts) > 1 else ""
                 view = parts[2] if len(parts) > 2 else "ov"
-                view_map = {
-                    "timeline": "tl", "guerre": "war", "battaglie": "bat",
-                    "persone": "ppl", "luoghi": "plc", "immagini": "img",
-                    "documenti": "doc", "soldati": "sld", "tecnologia": "tec",
-                }
-                page = render_era(eid, view_map.get(view, "ov"))
+                page = render_era(eid, SLUG_FACET.get(view, view if view in {k for k, _e, _t in FACETS} else "ov"))
+            elif path.startswith("/hc/"):
+                page = render_hc(path.split("/", 2)[-1])
             elif path.startswith("/wd/"):
                 page = render_wd(path.split("/", 2)[-1])
             elif path.startswith("/w/"):

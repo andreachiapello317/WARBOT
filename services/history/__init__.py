@@ -1,1 +1,1 @@
-"""Motore storico di EPOCHE: Wikidata + musei pubblici, una sola scheda per Q-id."""
+"""Motore storico di EPOCHE: schede curate WARBOT, archivi, Wikidata solo come grafo."""

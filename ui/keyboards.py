@@ -6,6 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.catalog import related_items
 from services.history.eras import all_eras
+from services.history.pack import FACETS
 from services.live import REGIONS
 from services.models import WORLDS
 
@@ -217,34 +218,64 @@ def era_index_keyboard() -> InlineKeyboardMarkup:
 
 
 def era_hub_keyboard(eid: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [kb_btn("🌍 Panoramica", f"era:{eid}:ov"), kb_btn("⏳ Timeline", f"era:{eid}:tl")],
-            [kb_btn("⚔️ Guerre", f"era:{eid}:war"), kb_btn("🗺️ Battaglie", f"era:{eid}:bat")],
-            [kb_btn("👤 Personaggi", f"era:{eid}:ppl"), kb_btn("🗺️ Luoghi", f"era:{eid}:plc")],
-            [kb_btn("🪖 Soldati", f"era:{eid}:sld"), kb_btn("⚙️ Tecnologia", f"era:{eid}:tec")],
-            [kb_btn("📸 Immagini", f"era:{eid}:img"), kb_btn("📜 Documenti", f"era:{eid}:doc")],
-            [kb_btn("🎲 Viaggia qui", f"era:{eid}:go"), kb_btn("📚 Cassetto", "l:war:all")],
-            [kb_btn("🌍 Tutte le epoche", "world:epoche")],
-            nav_row(),
-        ]
-    )
-
-
-def wd_list_keyboard(rows: list[dict], eid: str) -> InlineKeyboardMarkup:
-    buttons = [kb_btn(str(row.get("label") or row["id"])[:42], f"wd:{row['id']}") for row in rows[:20]]
+    buttons = [kb_btn(f"{emoji} {title}", f"era:{eid}:{key}") for key, emoji, title in FACETS]
     grid = _pairs(buttons)
-    grid.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("⏳ Timeline", f"era:{eid}:tl")])
+    grid.insert(0, [kb_btn("🌍 Panoramica", f"era:{eid}:ov")])
+    grid.append([kb_btn("🎲 Viaggia qui", f"era:{eid}:go"), kb_btn("📚 Cassetto", "l:war:all")])
+    grid.append([kb_btn("🌍 Tutte le epoche", "world:epoche")])
     grid.append(nav_row())
     return InlineKeyboardMarkup(grid)
 
 
-def wd_card_keyboard(item: dict, related: list[dict], eid: str | None = None) -> InlineKeyboardMarkup:
-    rel_btns = [kb_btn(str(r.get("label") or r["id"])[:42], f"wd:{r['id']}") for r in related[:6]]
+def hc_list_keyboard(rows: list[dict], eid: str) -> InlineKeyboardMarkup:
+    buttons = []
+    for row in rows[:20]:
+        if not row.get("id"):
+            continue
+        if not (row.get("db") == "warbot" or row.get("summary")):
+            continue
+        title = str(row.get("title") or row["id"])[:40]
+        emoji = row.get("emoji") or "📖"
+        buttons.append(kb_btn(f"{emoji} {title}", f"hc:{row['id']}"))
+    grid = _pairs(buttons)
+    grid.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("⏳ Cronologia", f"era:{eid}:tl")])
+    grid.append(nav_row())
+    return InlineKeyboardMarkup(grid)
+
+
+def hc_card_keyboard(item: dict, related: list[dict], eid: str | None = None) -> InlineKeyboardMarkup:
+    rel_btns = [
+        kb_btn(f"{r.get('emoji', '📖')} {str(r.get('title') or r.get('id'))[:36]}", f"hc:{r['id']}")
+        for r in related[:6]
+        if r.get("id")
+    ]
     rows = _pairs(rel_btns)
+    qid = item.get("qid") or ""
+    if qid:
+        rows.append([kb_btn("🔗 Grafo Wikidata", f"wd:{qid}")])
     if eid:
         rows.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("🎲 Un altro viaggio", "h:go")])
     else:
         rows.append([kb_btn("🌍 Epoche", "world:epoche"), kb_btn("🎲 Viaggia nel tempo", "h:go")])
     rows.append(nav_row())
     return InlineKeyboardMarkup(rows)
+
+
+def wd_card_keyboard(item: dict, related: list[dict], eid: str | None = None) -> InlineKeyboardMarkup:
+    if eid:
+        rows = [[kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("🎲 Viaggia", "h:go")]]
+    else:
+        rows = [[kb_btn("🌍 Epoche", "world:epoche"), kb_btn("🎲 Viaggia nel tempo", "h:go")]]
+    rows.append(nav_row())
+    return InlineKeyboardMarkup(rows)
+
+
+def mixed_search_keyboard(catalog_rows: list[dict], history_rows: list[dict]) -> InlineKeyboardMarkup:
+    buttons = [kb_btn(f"{item['emoji']} {item['title']}", f"e:{item['id']}") for item in catalog_rows[:12]]
+    buttons += [
+        kb_btn(f"{row.get('emoji', '📖')} {row['title']}", f"hc:{row['id']}")
+        for row in history_rows[:12]
+    ]
+    grid = _pairs(buttons[:24])
+    grid.append(nav_row())
+    return InlineKeyboardMarkup(grid)
