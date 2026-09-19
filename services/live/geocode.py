@@ -12,6 +12,7 @@ import urllib.request
 from typing import Any, Protocol
 
 from services.live import cache as osm_cache
+from services.live.engine import timed
 
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; geocoder cache; not bulk)"
 PHOTON_URL = "https://photon.komoot.io/api/"
@@ -204,6 +205,7 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
             return {"ok": True, "hits": hits, "query": q, "cached": True}
         return {"ok": False, "error": cached.get("error") or "nessun luogo trovato", "hits": [], "query": q, "cached": True}
 
+    t0 = time.time()
     primary = _backend()
     fallback = "nominatim" if primary != "nominatim" else "photon"
     rows: list[dict[str, Any]] = []
@@ -223,4 +225,5 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
 
     rows.sort(key=_rank)
     osm_cache.put(key, {"hits": rows}, osm_cache.GEOCODE_TTL)
+    timed("geocode", t0, q=q, n=len(rows))
     return {"ok": True, "hits": rows, "query": q, "cached": False}

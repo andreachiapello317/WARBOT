@@ -61,10 +61,32 @@ def osm_place_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def osm_category_keyboard(rows: list[dict] | None = None) -> InlineKeyboardMarkup:
-    items = list(rows or [])[:LIST_LIMIT]
-    buttons = [kb_btn(str(row.get("name") or "punto")[:40], f"live:ow:i:{i}") for i, row in enumerate(items)]
+def osm_category_keyboard(
+    rows: list[dict] | None = None,
+    *,
+    page: int = 0,
+    error_cat: str | None = None,
+) -> InlineKeyboardMarkup:
+    if error_cat:
+        return InlineKeyboardMarkup(
+            [
+                [kb_btn("🔄 Riprova", f"live:ow:c:{error_cat}")],
+                [kb_btn("📍 Località", "live:ow:here")],
+                nav_row(),
+            ]
+        )
+    start = max(0, page) * LIST_LIMIT
+    items = list(rows or [])
+    chunk = items[start : start + LIST_LIMIT]
+    buttons = [kb_btn(str(row.get("name") or "punto")[:40], f"live:ow:i:{start + i}") for i, row in enumerate(chunk)]
     grid = _pairs(buttons)
+    extra: list[InlineKeyboardButton] = []
+    if start + LIST_LIMIT < len(items):
+        extra.append(kb_btn("➡️ Altri risultati", "live:ow:more"))
+    if page > 0:
+        extra.append(kb_btn("⬅️ Lista precedente", "live:ow:pg"))
+    if extra:
+        grid.append(extra)
     grid.append([kb_btn("📍 Località", "live:ow:here"), kb_btn("🗺️ Mappa", "live:ow:map")])
     grid.append([kb_btn("🔎 Cerca un'altra località", "live:ow")])
     grid.append(nav_row())

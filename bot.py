@@ -29,6 +29,8 @@ from telegram.ext import (
 
 from services.live.geocode import geocode
 from services.live.osm import (
+    CATEGORIES,
+    LIST_LIMIT,
     clip,
     format_osm_category,
     format_osm_hits,
@@ -64,6 +66,7 @@ OSM_PLACE_KEY = "osm_place"
 OSM_HITS_KEY = "osm_hits"
 OSM_ROWS_KEY = "osm_rows"
 OSM_CAT_KEY = "osm_cat"
+OSM_PAGE_KEY = "osm_page"
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -296,11 +299,43 @@ async def show_osm_category(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     rows = list(bundle.get("rows") or [])
     context.user_data[OSM_ROWS_KEY] = rows
     context.user_data[OSM_CAT_KEY] = cat
+    context.user_data[OSM_PAGE_KEY] = 0
+    if not bundle.get("ok"):
+        await reply_html(
+            update,
+            context,
+            format_osm_category(bundle, place),
+            reply_markup=osm_category_keyboard(error_cat=cat),
+        )
+        return
     await reply_html(
         update,
         context,
-        format_osm_category(bundle, place),
-        reply_markup=osm_category_keyboard(rows),
+        format_osm_category(bundle, place, offset=0, limit=LIST_LIMIT),
+        reply_markup=osm_category_keyboard(rows, page=0),
+        preview=True,
+    )
+
+
+async def show_osm_category_page(update: Update, context: ContextTypes.DEFAULT_TYPE, delta: int) -> None:
+    rows = context.user_data.get(OSM_ROWS_KEY)
+    cat = context.user_data.get(OSM_CAT_KEY)
+    if not isinstance(rows, list) or not cat:
+        await show_osm_place(update, context)
+        return
+    page = int(context.user_data.get(OSM_PAGE_KEY) or 0) + delta
+    max_page = max(0, (len(rows) - 1) // LIST_LIMIT)
+    page = max(0, min(page, max_page))
+    context.user_data[OSM_PAGE_KEY] = page
+    meta = {"ok": True, "rows": rows, "title": None, "emoji": "", "total": len(rows), "pool": len(rows)}
+    info = CATEGORIES.get(str(cat)) or {}
+    meta["title"] = info.get("title")
+    meta["emoji"] = info.get("emoji")
+    await reply_html(
+        update,
+        context,
+        format_osm_category(meta, _osm_place(context), offset=page * LIST_LIMIT, limit=LIST_LIMIT),
+        reply_markup=osm_category_keyboard(rows, page=page),
         preview=True,
     )
 
@@ -370,6 +405,12 @@ async def open_ow(update: Update, context: ContextTypes.DEFAULT_TYPE, extra: str
         return
     if kind == "list":
         await show_osm_list(update, context)
+        return
+    if kind == "more":
+        await show_osm_category_page(update, context, 1)
+        return
+    if kind == "pg":
+        await show_osm_category_page(update, context, -1)
         return
     query = extra.replace(":", " ").strip()
     if query and query not in {"q", "search"}:

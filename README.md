@@ -8,11 +8,12 @@ Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo
 
 1. Scrivi Tokyo, Parigi, Milano… — solo geocoding, nessuna query Overpass
 2. 📍 Località e menu categorie, subito
-3. Tocca una categoria: query Overpass selettiva (`[out:json]`, timeout, pool limitato)
-4. Ranking di importanza (IATA, UIC, operator, Wikipedia…) → al massimo 20 risultati
-5. Stessa città + stessa categoria in cache: niente nuova richiesta Overpass
+3. Tocca una categoria: il query engine (stile Wizard Overpass Turbo) genera QL selettiva
+4. Primary query → se troppi pochi candidati, **una** fallback più larga
+5. Deduplica + ranking di categoria → al massimo 20 in lista (➡️ altri se ce ne sono)
+6. Cache geocoding e categoria+luogo; timeout Overpass con Riprova, senza martellare
 
-Le **stazioni principali** chiedono `uic_ref`, `building=train_station`, `train=yes` (+ operator/platforms). Non scaricano `railway=station` nudo, né halt, platform, subway, tram, bus_stop.
+Le **stazioni principali** chiedono `train=yes` / `uic_ref` / `building=train_station` e NOT subway/tram/platform/halt. Non scaricano `railway=station` nudo.
 
 ## Avvio locale
 
@@ -48,7 +49,8 @@ museum.py                 Web OSM WORLD (porta 47261)
 ui/keyboards.py           Tastiere
 ui/texts.py               Aiuto
 services/live/geocode.py  Photon (fail-fast) / Nominatim, cache
-services/live/osm.py      Overpass per categoria, filtri in QL
+services/live/engine.py   Compilatore query Overpass (stile Wizard)
+services/live/osm.py      Categorie, ranking, fallback, cache
 services/live/cache.py    Cache memoria + file, TTL
 ```
 

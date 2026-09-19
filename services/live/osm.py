@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -11,6 +12,9 @@ import urllib.request
 from typing import Any, Callable
 
 from services.live import cache as osm_cache
+from services.live.engine import FALLBACK_MIN, PAGE_CAP, PAGE_SIZE, compile_query, timed
+
+log = logging.getLogger("warbot.osm")
 
 TELEGRAM_MAX_LEN = 3900
 
@@ -18,11 +22,11 @@ OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
 DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 18, lo=8, hi=30)
 QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 14, lo=6, hi=25)
-OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 2, lo=1, hi=3)
+OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
-RESULT_LIMIT = osm_cache.int_env("OSM_RESULT_LIMIT", 20, lo=10, hi=30)
-LIST_LIMIT = RESULT_LIMIT
-QUERY_VER = "7"
+RESULT_LIMIT = PAGE_SIZE
+LIST_LIMIT = PAGE_SIZE
+QUERY_VER = "8"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -88,7 +92,10 @@ def accept_rail(tags: dict[str, Any]) -> bool:
         return False
     train_station = _yes(tags, "train") or tags.get("building") == "train_station" or bool(_tag(tags, "uic_ref"))
     if not train_station:
-        return False
+        if railway != "station" or not accept_named(tags):
+            return False
+        if _yes(tags, "subway", "tram", "light_rail"):
+            return False
     name = _tag(tags, "name:it", "name", "official_name").lower()
     if any(bit in name for bit in ("bivio", "cabina", "deposito", "scalo merci", "terminali italia")):
         return False
@@ -402,92 +409,109 @@ def importance_score(row: dict[str, Any]) -> int:
     return score
 
 
-# Filtri Overpass a livelli: tag indicizzati, niente nwr["railway"="station"] nudo.
-# Union dal più specifico al più largo; Python fa solo ranking sul pool già selettivo.
+# Clausole Overpass in stile Wizard: unione di AND, NOT come tag sulla stessa query.
+# primary = selettiva; fallback = un po' più larga, solo se i candidati sono pochi.
 CATEGORIES: dict[str, dict[str, Any]] = {
     "aero": {
         "id": "aero",
         "emoji": "✈️",
         "title": "Aeroporti",
-        "filters": (
+        "primary": (
             'nw["aeroway"="aerodrome"]["iata"]',
             'nw["aeroway"="aerodrome"]["icao"]',
-            'nw["aeroway"="aerodrome"]["name"]',
         ),
+        "fallback": ('nw["aeroway"="aerodrome"]["name"]',),
         "accept": accept_aerodrome,
         "score": score_aero,
         "out_limit": 40,
+        "fallback_min": 3,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
         "title": "Stazioni principali",
-        "filters": (
-            'nw["railway"="station"]["uic_ref"]',
+        "primary": (
+            'nw["railway"="station"]["train"="yes"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]["station"!="monorail"]',
+            'nw["railway"="station"]["uic_ref"]["station"!="subway"]["station"!="light_rail"]',
             'nw["building"="train_station"]["name"]',
-            'nw["railway"="station"]["train"="yes"]',
+        ),
+        "fallback": (
+            'nw["railway"="station"]["name"]["station"!="subway"]["station"!="light_rail"]["station"!="tram"]',
         ),
         "accept": accept_rail,
         "score": score_rail,
         "out_limit": 80,
+        "fallback_min": 5,
     },
     "hosp": {
         "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
-        "filters": (
-            'nw["amenity"="hospital"]["name"]',
+        "primary": (
+            'nw["amenity"="hospital"]["emergency"="yes"]["name"]',
+            'nw["amenity"="hospital"]["beds"]["name"]',
         ),
+        "fallback": ('nw["amenity"="hospital"]["name"]',),
         "accept": accept_named,
         "score": score_hosp,
         "out_limit": 50,
+        "fallback_min": 5,
     },
     "port": {
         "id": "port",
         "emoji": "⚓",
         "title": "Porti",
-        "filters": (
+        "primary": (
             'nw["industrial"="port"]["name"]',
             'nw["landuse"="harbour"]["name"]',
-            'nw["harbour"="yes"]["name"]',
         ),
+        "fallback": ('nw["harbour"="yes"]["name"]',),
         "accept": accept_port,
         "score": score_port,
         "out_limit": 40,
+        "fallback_min": 2,
     },
     "stad": {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "filters": ('nw["leisure"="stadium"]["name"]',),
+        "primary": ('nw["leisure"="stadium"]["name"]',),
+        "fallback": ('nw["leisure"="stadium"]["name"]',),
         "accept": accept_stadium,
         "score": score_stad,
         "out_limit": 40,
+        "fallback_min": 3,
     },
     "mall": {
         "id": "mall",
         "emoji": "🏬",
         "title": "Centri commerciali",
-        "filters": ('nw["shop"="mall"]["name"]',),
+        "primary": ('nw["shop"="mall"]["name"]',),
+        "fallback": ('nw["shop"="mall"]["name"]',),
         "accept": accept_mall,
         "score": score_mall,
         "out_limit": 40,
+        "fallback_min": 3,
     },
     "land": {
         "id": "land",
         "emoji": "🏛️",
         "title": "Luoghi principali",
-        "filters": (
+        "primary": (
             'nw["tourism"="attraction"]["wikidata"]["name"]',
             'nw["historic"="castle"]["name"]',
             'nw["historic"="palace"]["name"]',
-            'nw["historic"="monument"]["wikidata"]',
             'nw["amenity"="townhall"]["name"]',
             'nw["building"="cathedral"]["name"]',
+        ),
+        "fallback": (
+            'nw["historic"="monument"]["wikidata"]',
+            'nw["tourism"="museum"]["wikidata"]["name"]',
         ),
         "accept": accept_named,
         "score": score_land,
         "out_limit": 50,
+        "fallback_min": 5,
     },
 }
 
@@ -687,23 +711,60 @@ def normalize_element(el: dict[str, Any], *, category: str) -> dict[str, Any] | 
         "uic": _tag(tags, "uic_ref"),
         "building": _tag(tags, "building"),
         "train": _tag(tags, "train"),
+        "wheelchair": _tag(tags, "wheelchair"),
+        "railway": _tag(tags, "railway"),
+        "emergency": _tag(tags, "emergency"),
+        "beds": _tag(tags, "beds"),
         "map": osm_url(lat, lon, 15),
         "tags": tags,
     }
 
 
-def _build_query(bbox: BBox, filters: tuple[str, ...], *, timeout: int, limit: int) -> str:
-    area = _bbox_ql(bbox)
-    union = "\n  ".join(f"{flt}{area};" for flt in filters)
-    return (
-        f"[out:json][timeout:{timeout}][maxsize:8388608];\n"
-        f"(\n  {union}\n);\n"
-        f"out center {limit};"
+def build_query(bbox: BBox | str, category: str, *, fallback: bool = False, timeout: int | None = None, limit: int | None = None) -> str:
+    """Query Overpass QL per una categoria (primary o fallback). Non chiama la rete."""
+    cat = resolve_category(category)
+    if not cat:
+        raise ValueError(f"categoria sconosciuta: {category}")
+    box = parse_bbox(bbox)
+    meta = CATEGORIES[cat]
+    clauses = tuple(meta["fallback"] if fallback else meta.get("primary") or meta.get("filters") or ())
+    if not clauses:
+        raise ValueError(f"nessuna clausola Overpass per {cat}")
+    return compile_query(
+        box,
+        clauses,
+        timeout=timeout if timeout is not None else QUERY_TIMEOUT,
+        limit=limit if limit is not None else int(meta.get("out_limit") or OUT_LIMIT),
     )
 
 
+def _ingest(payload: dict[str, Any], *, category: str, box: BBox) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    clat, clon = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    for el in payload.get("elements") or []:
+        if not isinstance(el, dict):
+            continue
+        item = normalize_element(el, category=category)
+        if not item or item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        item["_clat"] = clat
+        item["_clon"] = clon
+        item["score"] = importance_score(item)
+        rows.append(item)
+    merged: dict[tuple, dict[str, Any]] = {}
+    for item in rows:
+        key = _cluster_key(item)
+        prev = merged.get(key)
+        merged[key] = item if prev is None else _merge_items(prev, item)
+    ranked = list(merged.values())
+    ranked.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+    return ranked
+
+
 def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Una sola categoria Overpass nel bounding box (south, west, north, east)."""
+    """Una categoria: query Wizard-style, fallback solo se i candidati sono pochi."""
     cat = resolve_category(category)
     if not cat:
         return {"ok": False, "error": f"categoria sconosciuta: {category}", "rows": [], "total": 0}
@@ -717,10 +778,13 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         return hit
 
     meta = CATEGORIES[cat]
-    filters = tuple(meta["filters"])
     pool_limit = int(meta.get("out_limit") or OUT_LIMIT)
-    query = _build_query(box, filters, timeout=QUERY_TIMEOUT, limit=pool_limit)
+    min_ok = int(meta.get("fallback_min") or FALLBACK_MIN)
+    query = build_query(box, cat, fallback=False, timeout=QUERY_TIMEOUT, limit=pool_limit)
+    used_fallback = False
+    t0 = time.time()
     payload = overpass(query, timeout=timeout)
+    timed("overpass", t0, cat=cat, fallback=0, ok=int(bool(payload.get("ok"))))
     if not payload.get("ok"):
         return {
             "ok": False,
@@ -732,29 +796,28 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
             "total": 0,
             "query": query,
             "cached": False,
+            "retry": True,
         }
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for el in payload.get("elements") or []:
-        if not isinstance(el, dict):
-            continue
-        item = normalize_element(el, category=cat)
-        if not item or item["id"] in seen:
-            continue
-        seen.add(item["id"])
-        item["_clat"] = (box[0] + box[2]) / 2
-        item["_clon"] = (box[1] + box[3]) / 2
-        item["score"] = importance_score(item)
-        rows.append(item)
-    merged: dict[tuple, dict[str, Any]] = {}
-    for item in rows:
-        key = _cluster_key(item)
-        prev = merged.get(key)
-        merged[key] = item if prev is None else _merge_items(prev, item)
-    rows = list(merged.values())
-    rows.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+    t1 = time.time()
+    rows = _ingest(payload, category=cat, box=box)
+    timed("parse_rank", t1, cat=cat, n=len(rows))
+    fallback_clauses = tuple(meta.get("fallback") or ())
+    if len(rows) < min_ok and fallback_clauses and fallback_clauses != tuple(meta.get("primary") or ()):
+        q2 = build_query(box, cat, fallback=True, timeout=QUERY_TIMEOUT, limit=pool_limit)
+        t2 = time.time()
+        p2 = overpass(q2, timeout=timeout)
+        timed("overpass", t2, cat=cat, fallback=1, ok=int(bool(p2.get("ok"))))
+        if p2.get("ok"):
+            extra = _ingest(p2, category=cat, box=box)
+            by_id = {r["id"]: r for r in rows}
+            for item in extra:
+                by_id.setdefault(item["id"], item)
+            rows = list(by_id.values())
+            rows.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+            query = q2
+            used_fallback = True
     pool = len(rows)
-    rows = rows[:RESULT_LIMIT]
+    rows = rows[:PAGE_CAP]
     for item in rows:
         item.pop("tags", None)
         item.pop("_clat", None)
@@ -768,12 +831,14 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         "rows": rows,
         "total": len(rows),
         "pool": pool,
+        "fallback": used_fallback,
         "source": "OpenStreetMap / Overpass",
         "ts": time.time(),
         "query": query,
         "cached": False,
     }
     osm_cache.put(_cache_key(box, cat), {k: v for k, v in bundle.items() if k != "cached"}, osm_cache.OVERPASS_TTL)
+    log.debug("osm search cat=%s n=%d fallback=%s", cat, len(rows), used_fallback)
     return bundle
 
 
@@ -834,35 +899,36 @@ def _row_line(row: dict[str, Any]) -> str:
     return f"• <b>{e(row['name'])}</b>{codes}"
 
 
-def format_osm_category(bundle: dict[str, Any], place: dict[str, Any] | None = None, *, limit: int = LIST_LIMIT) -> str:
+def format_osm_category(bundle: dict[str, Any], place: dict[str, Any] | None = None, *, limit: int = LIST_LIMIT, offset: int = 0) -> str:
     if not bundle.get("ok"):
         return (
             "🌍 <b>OSM WORLD</b>\n\n"
-            "Overpass non ha risposto.\n"
+            "Overpass non ha risposto. Riprova tra un attimo.\n"
             f"<i>{e(bundle.get('error') or 'timeout')}</i>"
         )
     where = ""
     if place:
         where = f" · {e(place.get('display') or place.get('name'))}"
     cached = " · cache" if bundle.get("cached") else ""
-    pool = int(bundle.get("pool") or bundle.get("total") or 0)
-    shown = len(bundle.get("rows") or [])
-    if pool > shown:
-        tally = f"{shown} principali su {pool} nel riquadro{cached}"
-    else:
-        tally = f"{bundle.get('total', 0)} principali{cached}"
+    fb = " · fallback" if bundle.get("fallback") else ""
+    rows = bundle.get("rows") or []
+    start = max(0, offset)
+    chunk = rows[start : start + limit]
+    pool = int(bundle.get("pool") or len(rows) or 0)
+    tally = f"{len(chunk)} di {len(rows)} principali{cached}{fb}"
+    if pool > len(rows):
+        tally += f" · pool {pool}"
     lines = [
         f"{bundle.get('emoji', '🗺️')} <b>{e(bundle.get('title'))}</b>{where}",
         f"{tally} · tocca una scheda",
         "",
     ]
-    rows = bundle.get("rows") or []
-    if not rows:
+    if not chunk:
         lines.append("Niente in questa categoria nel riquadro.")
-    for row in rows[:limit]:
+    for row in chunk:
         lines.append(_row_line(row))
-    if len(rows) > limit:
-        lines.append(f"… +{len(rows) - limit}")
+    if start + limit < len(rows):
+        lines.append(f"… altri {len(rows) - start - limit}")
     lines += ["", f"<i>{OSM_NOTE}</i>"]
     return clip("\n".join(lines))
 
@@ -885,8 +951,14 @@ def format_osm_item(row: dict[str, Any], place: dict[str, Any] | None = None) ->
         bits.append(e(row["operator"]))
     if row.get("building"):
         bits.append(e(row["building"]))
-    if row.get("train") == "yes":
-        bits.append("train=yes")
+    if row.get("train") == "yes" or row.get("railway") == "station":
+        bits.append("🚄 ferroviaria")
+    if row.get("wheelchair"):
+        bits.append(f"♿ {e(row['wheelchair'])}")
+    if row.get("emergency") == "yes":
+        bits.append("emergency")
+    if row.get("beds"):
+        bits.append(f"posti {e(row['beds'])}")
     if bits:
         lines.append(" · ".join(bits))
     if row.get("website"):
