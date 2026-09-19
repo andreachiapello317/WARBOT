@@ -33,7 +33,8 @@ def esplora_text() -> str:
         "🏳️ Bandiere — gli eserciti\n"
         "⚙️ Ferro — oggetti e opere\n"
         "🕊️ Patti — la pace e chi ha firmato\n"
-        "📡 Posizioni live — aerei, navi, ISS in diretta\n\n"
+        "📡 Posizioni live — aerei, navi, ISS in diretta\n"
+        "🌍 Epoche — timeline, personaggi, immagini di musei\n\n"
         f"<i>{DISCLAIMER}</i>"
     )
 
@@ -41,7 +42,7 @@ def esplora_text() -> str:
 def world_text(key: str) -> str:
     meta = WORLDS[key]
     extra = {
-        "epoche": "Scegli un'era, poi una guerra. Date, attori, andamento, trattati.",
+        "epoche": "Diciotto ere, una timeline viva. Guerre, persone, luoghi e immagini da Wikidata e dai musei.",
         "campi": "Ogni battaglia ha data, luogo, forze, fasi narrative, comandanti, memoria.",
         "truppe": "Ruoli storici (fante, genio, medico…) e scala dei gradi, con confronti.",
         "bandiere": "Schede pubbliche: storia, organizzazione generale, tradizioni, missioni note.",
@@ -80,7 +81,8 @@ def help_text() -> str:
         "📚 <b>Manuale del museo</b>\n\n"
         "/start — i sei mondi\n"
         "/esplora — mappa dei mondi\n"
-        "/epoche — guerre storiche\n"
+        "/epoche — timeline storica (Wikidata, musei, viaggia nel tempo)\n"
+        "/viaggia — un anno, un evento, un luogo a caso\n"
         "/campi — battaglie\n"
         "/truppe — soldati e gradi\n"
         "/bandiere — forze armate\n"

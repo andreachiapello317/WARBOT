@@ -15,7 +15,13 @@ Non è un manuale operativo. I testi descrivono guerre, eserciti, mezzi e tratta
 | ⚙️ **Ferro** | Equipaggiamento, mezzi, fortificazioni, spazio militare |
 | 🕊️ **Patti** | Trattati, pace, personaggi, strategia come storia |
 
-In home, in cima: **📡 Posizioni live**. Poi **Oggi**, **Casuale**, **Cerca**, **Quiz**, **Esplora**.
+## Epoche (timeline viva)
+
+Non sono più solo le schede statiche. **🌍 Epoche** apre diciotto ere (Preistoria → era digitale). Per ognuna: panoramica Wikipedia/Wikidata, timeline, guerre, personaggi, luoghi, soldati, tecnologia, galleria (Commons + Library of Congress, Europeana se `EUROPEANA_API_KEY`).
+
+Una sola scheda per Q-id Wikidata: Napoleone non si duplica tra moduli. **🎲 Viaggia nel tempo** (`/viaggia`) pesca anno, evento, persone, immagine.
+
+Le 85 schede del cassetto restano sotto **📚 Cassetto del museo**. Campi, Truppe, Bandiere, Ferro, Patti non sono toccati.
 
 ## Live (aerei, navi, ISS)
 
@@ -72,7 +78,8 @@ Senza `WEBHOOK_URL` parte in **polling**. In produzione (Render) imposta `WEBHOO
 ```
 start - I sei mondi del museo
 esplora - Mappa dei mondi
-epoche - Guerre storiche
+epoche - Timeline storica da archivi pubblici
+viaggia - Un anno e un evento a caso
 campi - Battaglie
 truppe - Soldati e gradi
 bandiere - Forze armate

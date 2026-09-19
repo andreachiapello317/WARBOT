@@ -5,6 +5,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.catalog import related_items
+from services.history.eras import all_eras
 from services.live import REGIONS
 from services.models import WORLDS
 
@@ -57,12 +58,9 @@ def esplora_keyboard() -> InlineKeyboardMarkup:
 
 
 def world_keyboard(key: str) -> InlineKeyboardMarkup:
+    if key == "epoche":
+        return era_index_keyboard()
     extra = {
-        "epoche": [
-            [kb_btn("🏛️ Antichità", "l:war:ant"), kb_btn("🏰 Medioevo", "l:war:med")],
-            [kb_btn("⚔️ Età moderna", "l:war:mod"), kb_btn("🌍 Contemporanea", "l:war:con")],
-            [kb_btn("📚 Tutte le guerre", "l:war:all")],
-        ],
         "campi": [
             [kb_btn("🏛️ Antiche", "l:bat:ant"), kb_btn("🏰 Medievali", "l:bat:med")],
             [kb_btn("⚔️ Moderne", "l:bat:mod"), kb_btn("🌍 Contemporanee", "l:bat:con")],
@@ -207,3 +205,46 @@ def live_misc_keyboard(token: str) -> InlineKeyboardMarkup:
             nav_row(),
         ]
     )
+
+
+def era_index_keyboard() -> InlineKeyboardMarkup:
+    buttons = [kb_btn(f"{era['emoji']} {era['title']}", f"era:{era['id']}") for era in all_eras()]
+    grid = _pairs(buttons)
+    grid.append([kb_btn("🎲 Viaggia nel tempo", "h:go")])
+    grid.append([kb_btn("📚 Cassetto del museo", "l:war:all")])
+    grid.append(nav_row())
+    return InlineKeyboardMarkup(grid)
+
+
+def era_hub_keyboard(eid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [kb_btn("🌍 Panoramica", f"era:{eid}:ov"), kb_btn("⏳ Timeline", f"era:{eid}:tl")],
+            [kb_btn("⚔️ Guerre", f"era:{eid}:war"), kb_btn("🗺️ Battaglie", f"era:{eid}:bat")],
+            [kb_btn("👤 Personaggi", f"era:{eid}:ppl"), kb_btn("🗺️ Luoghi", f"era:{eid}:plc")],
+            [kb_btn("🪖 Soldati", f"era:{eid}:sld"), kb_btn("⚙️ Tecnologia", f"era:{eid}:tec")],
+            [kb_btn("📸 Immagini", f"era:{eid}:img"), kb_btn("📜 Documenti", f"era:{eid}:doc")],
+            [kb_btn("🎲 Viaggia qui", f"era:{eid}:go"), kb_btn("📚 Cassetto", "l:war:all")],
+            [kb_btn("🌍 Tutte le epoche", "world:epoche")],
+            nav_row(),
+        ]
+    )
+
+
+def wd_list_keyboard(rows: list[dict], eid: str) -> InlineKeyboardMarkup:
+    buttons = [kb_btn(str(row.get("label") or row["id"])[:42], f"wd:{row['id']}") for row in rows[:20]]
+    grid = _pairs(buttons)
+    grid.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("⏳ Timeline", f"era:{eid}:tl")])
+    grid.append(nav_row())
+    return InlineKeyboardMarkup(grid)
+
+
+def wd_card_keyboard(item: dict, related: list[dict], eid: str | None = None) -> InlineKeyboardMarkup:
+    rel_btns = [kb_btn(str(r.get("label") or r["id"])[:42], f"wd:{r['id']}") for r in related[:6]]
+    rows = _pairs(rel_btns)
+    if eid:
+        rows.append([kb_btn("🌍 Epoca", f"era:{eid}"), kb_btn("🎲 Un altro viaggio", "h:go")])
+    else:
+        rows.append([kb_btn("🌍 Epoche", "world:epoche"), kb_btn("🎲 Viaggia nel tempo", "h:go")])
+    rows.append(nav_row())
+    return InlineKeyboardMarkup(rows)

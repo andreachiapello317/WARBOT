@@ -43,6 +43,22 @@ from services.catalog import (
     random_item,
     search,
 )
+from services.history.engine import (
+    entity_card,
+    format_entity,
+    format_era_index,
+    format_gallery,
+    format_list as format_era_list,
+    format_overview,
+    format_timeline,
+    format_travel,
+    gallery,
+    list_for,
+    overview,
+    timeline,
+    travel,
+)
+from services.history.eras import ERAS
 from services.live import (
     REGIONS,
     fetch_aircraft,
@@ -60,6 +76,8 @@ from ui.keyboards import (
     after_quiz_keyboard,
     back_home_keyboard,
     entity_keyboard,
+    era_hub_keyboard,
+    era_index_keyboard,
     esplora_keyboard,
     home_keyboard,
     list_keyboard,
@@ -69,6 +87,8 @@ from ui.keyboards import (
     quiz_hub_keyboard,
     quiz_options_keyboard,
     rank_scale_keyboard,
+    wd_card_keyboard,
+    wd_list_keyboard,
     world_keyboard,
 )
 from ui.texts import (
@@ -85,6 +105,7 @@ LAST_BOT_MSG_KEY = "last_bot_msg"
 NAV_STACK_KEY = "nav_stack"
 NAV_HERE_KEY = "nav_here"
 NAV_MAX = 24
+ERA_HERE_KEY = "era_here"
 SEARCH_KEY = "warbot_search"
 QUIZ_KEY = "warbot_quiz"
 EMPTY_KEYBOARD = InlineKeyboardMarkup([])
@@ -265,6 +286,9 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def show_world(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str) -> None:
+    if key == "epoche":
+        await reply_html(update, context, format_era_index(), reply_markup=era_index_keyboard())
+        return
     await reply_html(update, context, world_text(key), reply_markup=world_keyboard(key))
 
 
@@ -401,6 +425,15 @@ async def open_token(update: Update, context: ContextTypes.DEFAULT_TYPE, token: 
     if prefix == "live":
         await open_live(update, context, action, extra)
         return
+    if prefix == "era":
+        await open_era(update, context, action, extra)
+        return
+    if prefix == "wd" and action:
+        await show_wd(update, context, action)
+        return
+    if prefix == "h" and action == "go":
+        await show_travel(update, context, None)
+        return
     if prefix == "e" and action:
         await show_entity(update, context, action)
         return
@@ -460,6 +493,12 @@ async def cmd_epoche(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await cmd_world(update, context, "epoche")
 
 
+async def cmd_viaggia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _cmd_begin(context, "h:go")
+    await show_travel(update, context, None)
+    await delete_user_command(update)
+
+
 async def cmd_campi(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await cmd_world(update, context, "campi")
 
@@ -507,6 +546,115 @@ async def cmd_casuale(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     _cmd_begin(context, "home:random")
     await show_entity(update, context, random_item()["id"])
     await delete_user_command(update)
+
+
+def _era_here(context: ContextTypes.DEFAULT_TYPE, eid: str | None = None) -> str | None:
+    if eid:
+        context.user_data[ERA_HERE_KEY] = eid
+        return eid
+    here = context.user_data.get(ERA_HERE_KEY)
+    return here if isinstance(here, str) else None
+
+
+async def show_era_hub(update: Update, context: ContextTypes.DEFAULT_TYPE, eid: str) -> None:
+    if eid not in ERAS:
+        await reply_html(update, context, "Epoca non in mappa.", reply_markup=era_index_keyboard())
+        return
+    _era_here(context, eid)
+    await reply_html(
+        update,
+        context,
+        "🌍 <b>EPOCHE</b>\n\nApro gli archivi (Wikidata, Wikipedia)…",
+        reply_markup=era_hub_keyboard(eid),
+    )
+    data = await asyncio.to_thread(overview, eid)
+    await reply_html(
+        update,
+        context,
+        format_overview(data),
+        reply_markup=era_hub_keyboard(eid),
+        preview=True,
+    )
+
+
+async def show_wd(update: Update, context: ContextTypes.DEFAULT_TYPE, qid: str) -> None:
+    await reply_html(update, context, "📖 Apro la scheda Wikidata…", reply_markup=back_home_keyboard())
+    data = await asyncio.to_thread(entity_card, qid)
+    if not data:
+        await reply_html(update, context, "Questa entità non è arrivata da Wikidata.", reply_markup=era_index_keyboard())
+        return
+    eid = _era_here(context)
+    await reply_html(
+        update,
+        context,
+        format_entity(data),
+        reply_markup=wd_card_keyboard(data["item"], data.get("related") or [], eid),
+        preview=True,
+    )
+
+
+async def show_travel(update: Update, context: ContextTypes.DEFAULT_TYPE, eid: str | None) -> None:
+    await reply_html(update, context, "🎲 <b>VIAGGIA NEL TEMPO</b>\n\nScelgo un anno…", reply_markup=back_home_keyboard())
+    data = await asyncio.to_thread(travel, eid)
+    era_id = (data.get("era") or {}).get("id")
+    if era_id:
+        _era_here(context, era_id)
+    event = data.get("event") or {}
+    related = data.get("people") or []
+    markup = wd_card_keyboard(event, related, era_id) if event.get("id") else era_hub_keyboard(era_id or "ww2")
+    await reply_html(update, context, format_travel(data), reply_markup=markup, preview=True)
+
+
+async def open_era(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, extra: str) -> None:
+    if not action or action == "list":
+        await reply_html(update, context, format_era_index(), reply_markup=era_index_keyboard())
+        return
+    if action not in ERAS:
+        await reply_html(update, context, "Epoca non in mappa.", reply_markup=era_index_keyboard())
+        return
+    _era_here(context, action)
+    if extra in {"", "hub", "ov"}:
+        await show_era_hub(update, context, action)
+        return
+    if extra == "go":
+        await show_travel(update, context, action)
+        return
+    headings = {
+        "tl": "Timeline",
+        "war": "Guerre e campagne",
+        "bat": "Battaglie",
+        "ppl": "Personaggi",
+        "plc": "Luoghi",
+        "sld": "Soldati e uniformi",
+        "tec": "Tecnologia",
+        "img": "Immagini",
+        "doc": "Documenti",
+    }
+    if extra not in headings:
+        await show_era_hub(update, context, action)
+        return
+    await reply_html(
+        update,
+        context,
+        f"{ERAS[action]['emoji']} <b>{ERAS[action]['title']}</b>\n\nInterrogo gli archivi…",
+        reply_markup=era_hub_keyboard(action),
+    )
+    if extra == "tl":
+        data = await asyncio.to_thread(timeline, action)
+        text = format_timeline(data)
+        rows = []
+        for _year, chunk in data.get("years") or []:
+            rows.extend(chunk)
+        markup = wd_list_keyboard(rows, action) if rows else era_hub_keyboard(action)
+    elif extra in {"sld", "tec", "img", "doc"}:
+        data = await asyncio.to_thread(gallery, action, flavor=extra)
+        text = format_gallery(data, headings[extra])
+        markup = era_hub_keyboard(action)
+    else:
+        data = await asyncio.to_thread(list_for, action, extra)
+        text = format_era_list(data, headings[extra])
+        markup = wd_list_keyboard(data.get("rows") or [], action)
+    await reply_html(update, context, text, reply_markup=markup, preview=True)
 
 
 def _live_region(raw: str | None) -> str:
@@ -733,7 +881,8 @@ async def post_init(application: Application) -> None:
                 BotCommand("navi", "Navi AIS del Baltico"),
                 BotCommand("iss", "Mappa della stazione spaziale"),
                 BotCommand("esplora", "Mappa dei mondi"),
-                BotCommand("epoche", "Guerre storiche"),
+                BotCommand("epoche", "Timeline storica da archivi pubblici"),
+                BotCommand("viaggia", "Un anno e un evento a caso"),
                 BotCommand("campi", "Battaglie"),
                 BotCommand("truppe", "Soldati e gradi"),
                 BotCommand("bandiere", "Forze armate"),
@@ -762,6 +911,7 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler(["aiuto", "help"], cmd_aiuto))
     application.add_handler(CommandHandler(["esplora", "explore"], cmd_esplora))
     application.add_handler(CommandHandler("epoche", cmd_epoche))
+    application.add_handler(CommandHandler(["viaggia", "tempo"], cmd_viaggia))
     application.add_handler(CommandHandler(["campi", "battaglie"], cmd_campi))
     application.add_handler(CommandHandler(["truppe", "soldati", "gradi"], cmd_truppe))
     application.add_handler(CommandHandler(["bandiere", "eserciti"], cmd_bandiere))
@@ -780,6 +930,9 @@ def build_application(token: str) -> Application:
     application.add_handler(CallbackQueryHandler(on_world_action, pattern=r"^world:"))
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^home:"))
     application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^live:"))
+    application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^era:"))
+    application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^wd:"))
+    application.add_handler(CallbackQueryHandler(on_home_action, pattern=r"^h:"))
     application.add_handler(CallbackQueryHandler(on_entity_action, pattern=r"^(e|s|l|rnd):"))
     application.add_handler(CallbackQueryHandler(on_quiz_tap, pattern=r"^q"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_plain_text))
