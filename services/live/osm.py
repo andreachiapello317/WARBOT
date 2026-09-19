@@ -22,7 +22,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 2, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = osm_cache.int_env("OSM_RESULT_LIMIT", 20, lo=10, hi=30)
 LIST_LIMIT = RESULT_LIMIT
-QUERY_VER = "4"
+QUERY_VER = "5"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -233,8 +233,6 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "filters": (
             'nw["aeroway"="aerodrome"]["iata"]',
             'nw["aeroway"="aerodrome"]["icao"]',
-            'nw["aeroway"="aerodrome"]["aerodrome"="international"]',
-            'nw["aeroway"="aerodrome"]["name"]["website"]',
             'nw["aeroway"="aerodrome"]["name"]',
         ),
         "accept": accept_aerodrome,
@@ -248,8 +246,6 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "filters": (
             'nw["railway"="station"]["uic_ref"]',
             'nw["building"="train_station"]["name"]',
-            'nw["railway"="station"]["train"="yes"]["operator"]',
-            'nw["railway"="station"]["train"="yes"]["platforms"]',
             'nw["railway"="station"]["train"="yes"]',
         ),
         "accept": accept_rail,
@@ -261,10 +257,6 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "emoji": "🏥",
         "title": "Ospedali",
         "filters": (
-            'nw["amenity"="hospital"]["emergency"="yes"]["name"]',
-            'nw["amenity"="hospital"]["beds"]["name"]',
-            'nw["amenity"="hospital"]["operator"]["name"]',
-            'nw["amenity"="hospital"]["website"]["name"]',
             'nw["amenity"="hospital"]["name"]',
         ),
         "accept": accept_named,
@@ -277,7 +269,6 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "title": "Porti",
         "filters": (
             'nw["industrial"="port"]["name"]',
-            'nw["landuse"="port"]["name"]',
             'nw["landuse"="harbour"]["name"]',
             'nw["harbour"="yes"]["name"]',
         ),
@@ -289,10 +280,7 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "filters": (
-            'nw["leisure"="stadium"]["wikidata"]["name"]',
-            'nw["leisure"="stadium"]["name"]',
-        ),
+        "filters": ('nw["leisure"="stadium"]["name"]',),
         "accept": accept_stadium,
         "score": score_stad,
         "out_limit": 40,
