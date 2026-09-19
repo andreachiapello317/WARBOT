@@ -22,7 +22,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 2, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = osm_cache.int_env("OSM_RESULT_LIMIT", 20, lo=10, hi=30)
 LIST_LIMIT = RESULT_LIMIT
-QUERY_VER = "5"
+QUERY_VER = "7"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -117,8 +117,141 @@ def accept_stadium(tags: dict[str, Any]) -> bool:
     return tags.get("leisure") == "stadium" and accept_named(tags)
 
 
+_GROCERY_MARKERS = (
+    "conad",
+    "lidl",
+    "eurospin",
+    "esselunga",
+    "penny",
+    "aldi",
+    "despar",
+    "iperal",
+    "carrefour express",
+    "carrefour market",
+    "md discount",
+)
+_NOT_MALL = (
+    "muji",
+    "pepco",
+    "pylones",
+    "koko",
+    "io bimbo",
+    "altromercato",
+    "multistock",
+    "upim",
+)
+_NAME_PREFIXES = (
+    "stazione di ",
+    "stazione ",
+    "ex stazione di ",
+    "ex stazione ",
+    "centro commerciale ",
+    "shopville ",
+    "nca ",
+    "nuovo complesso aziendale ",
+)
+_MAJOR_RAIL = (
+    ("centrale", 8),
+    ("porta nuova", 8),
+    ("termini", 8),
+    ("porta susa", 7),
+    ("porta garibaldi", 7),
+    ("lingotto", 7),
+    ("cadorna", 5),
+    ("lambrate", 4),
+)
+
+
+def _blob(*parts: Any) -> str:
+    return " ".join(str(p or "") for p in parts).lower()
+
+
+def _norm_place_name(name: str) -> str:
+    n = " ".join(str(name or "").lower().split())
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _NAME_PREFIXES:
+            if n.startswith(prefix):
+                n = n[len(prefix) :].strip()
+                changed = True
+    return n
+
+
+def _prefer_name(left: str, right: str) -> str:
+    def rank(n: str) -> tuple:
+        nl = n.lower()
+        return (
+            nl.startswith("ex "),
+            nl.startswith("stazione"),
+            "complesso aziendale" in nl,
+            n.startswith("NCA "),
+            len(n),
+        )
+
+    return left if rank(left) <= rank(right) else right
+
+
+def _cluster_key(item: dict[str, Any]) -> tuple:
+    name = _norm_place_name(item.get("name") or "")
+    return ("g", name, round(float(item["lat"]), 2), round(float(item["lon"]), 2))
+
+
+def _merge_items(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    tags = {**(left.get("tags") or {}), **(right.get("tags") or {})}
+    out = dict(left)
+    out["tags"] = tags
+    out["name"] = _prefer_name(str(left.get("name") or ""), str(right.get("name") or ""))
+    for key in (
+        "uic",
+        "iata",
+        "icao",
+        "operator",
+        "website",
+        "wikipedia",
+        "wikipedia_url",
+        "wikidata",
+        "wikidata_url",
+        "building",
+        "train",
+    ):
+        if not out.get(key) and right.get(key):
+            out[key] = right[key]
+    if not out.get("uic"):
+        out["uic"] = _tag(tags, "uic_ref")
+    if not out.get("train"):
+        out["train"] = _tag(tags, "train")
+    if not out.get("building"):
+        out["building"] = _tag(tags, "building")
+    if not out.get("operator"):
+        out["operator"] = _tag(tags, "operator")
+    if not out.get("website"):
+        out["website"] = _tag(tags, "website", "contact:website")
+    if not out.get("wikidata"):
+        qid = _tag(tags, "wikidata")
+        out["wikidata"] = qid
+        out["wikidata_url"] = wikidata_url(qid) if qid else ""
+    if not out.get("wikipedia"):
+        wiki = _tag(tags, "wikipedia")
+        out["wikipedia"] = wiki
+        out["wikipedia_url"] = wikipedia_url(wiki) if wiki else ""
+    out["score"] = importance_score(out)
+    return out
+
+
 def accept_mall(tags: dict[str, Any]) -> bool:
-    return tags.get("shop") in {"mall", "department_store"} and accept_named(tags)
+    shop = tags.get("shop")
+    blob = _blob(_tag(tags, "name", "brand", "operator"))
+    if any(mark in blob for mark in _GROCERY_MARKERS) or any(mark in blob for mark in _NOT_MALL):
+        return False
+    if shop == "mall":
+        return accept_named(tags)
+    if shop == "department_store":
+        if _tag(tags, "wikipedia", "wikidata"):
+            return accept_named(tags)
+        brand = _blob(_tag(tags, "brand", "name"))
+        return "rinascente" in brand or brand.strip() == "coin"
+    return False
 
 
 def score_aero(_row: dict[str, Any], tags: dict[str, Any]) -> int:
@@ -131,12 +264,32 @@ def score_aero(_row: dict[str, Any], tags: dict[str, Any]) -> int:
     return extra
 
 
-def score_rail(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+def score_rail(row: dict[str, Any], tags: dict[str, Any]) -> int:
     extra = 0
     if _tag(tags, "platforms"):
         extra += 2
+        try:
+            if int(str(_tag(tags, "platforms")).split(";")[0]) >= 5:
+                extra += 2
+        except ValueError:
+            pass
     if tags.get("public_transport") == "station":
         extra += 2
+    if row.get("wikidata") or _tag(tags, "wikidata"):
+        extra += 4
+    if row.get("wikipedia") or _tag(tags, "wikipedia"):
+        extra += 3
+    name = _blob(row.get("name"), _tag(tags, "name:it", "name"))
+    if name.startswith("ex ") or "ex stazione" in name:
+        extra -= 12
+    for hint, pts in _MAJOR_RAIL:
+        if hint in name:
+            extra += pts
+            break
+    clat, clon = row.get("_clat"), row.get("_clon")
+    if isinstance(clat, (int, float)) and isinstance(clon, (int, float)):
+        dist = ((float(row["lat"]) - float(clat)) ** 2 + (float(row["lon"]) - float(clon)) ** 2) ** 0.5
+        extra += max(0, 5 - int(dist * 80))
     return extra
 
 
@@ -173,13 +326,36 @@ def score_stad(_row: dict[str, Any], tags: dict[str, Any]) -> int:
     return extra
 
 
-def score_mall(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+def score_mall(row: dict[str, Any], tags: dict[str, Any]) -> int:
+    """I centri veri sopra Conad, Muji e i negozi singoli taggati male."""
     extra = 0
+    name = _blob(row.get("name"), _tag(tags, "name", "brand"))
     if tags.get("shop") == "mall":
-        extra += 3
+        extra += 8
     elif tags.get("shop") == "department_store":
-        extra += 1
-    if _tag(tags, "wikidata"):
+        extra += 2
+        if "rinascente" in name:
+            extra += 6
+    for token, pts in (
+        ("shopville", 7),
+        ("centro commerciale", 6),
+        ("outlet", 6),
+        ("gallerie", 5),
+        ("gallery", 5),
+        ("retail park", 5),
+        ("megashopping", 4),
+        ("le gru", 6),
+        ("8 gallery", 6),
+        ("lingotto", 4),
+    ):
+        if token in name:
+            extra += pts
+            break
+    if row.get("wikidata") or _tag(tags, "wikidata"):
+        extra += 4
+    if row.get("wikipedia") or _tag(tags, "wikipedia"):
+        extra += 5
+    if tags.get("building") in {"retail", "commercial", "mall"}:
         extra += 2
     return extra
 
@@ -200,6 +376,10 @@ def score_land(_row: dict[str, Any], tags: dict[str, Any]) -> int:
 def importance_score(row: dict[str, Any]) -> int:
     """Punteggio di importanza. Non è un dump: sceglie i 15–20 oggetti più parlanti."""
     tags = row.get("tags") or {}
+    cat = row.get("category") or ""
+    extra: ScoreFn | None = (CATEGORIES.get(cat) or {}).get("score")
+    if cat == "mall":
+        return extra(row, tags) if extra else 0
     score = 0
     if row.get("iata") or _tag(tags, "iata"):
         score += 5
@@ -217,7 +397,6 @@ def importance_score(row: dict[str, Any]) -> int:
         score += 2
     if row.get("wikipedia") or _tag(tags, "wikipedia"):
         score += 1
-    extra: ScoreFn | None = (CATEGORIES.get(row.get("category") or "") or {}).get("score")
     if extra:
         score += extra(row, tags)
     return score
@@ -289,10 +468,7 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "id": "mall",
         "emoji": "🏬",
         "title": "Centri commerciali",
-        "filters": (
-            'nw["shop"="mall"]["name"]',
-            'nw["shop"="department_store"]["name"]',
-        ),
+        "filters": ('nw["shop"="mall"]["name"]',),
         "accept": accept_mall,
         "score": score_mall,
         "out_limit": 40,
@@ -566,20 +742,23 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         if not item or item["id"] in seen:
             continue
         seen.add(item["id"])
+        item["_clat"] = (box[0] + box[2]) / 2
+        item["_clon"] = (box[1] + box[3]) / 2
         item["score"] = importance_score(item)
         rows.append(item)
     merged: dict[tuple, dict[str, Any]] = {}
     for item in rows:
-        key = (item["name"].lower(), round(item["lat"], 3), round(item["lon"], 3))
+        key = _cluster_key(item)
         prev = merged.get(key)
-        if prev is None or int(item.get("score") or 0) > int(prev.get("score") or 0):
-            merged[key] = item
+        merged[key] = item if prev is None else _merge_items(prev, item)
     rows = list(merged.values())
     rows.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
     pool = len(rows)
     rows = rows[:RESULT_LIMIT]
     for item in rows:
         item.pop("tags", None)
+        item.pop("_clat", None)
+        item.pop("_clon", None)
     bundle = {
         "ok": True,
         "category": cat,
