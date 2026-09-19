@@ -26,7 +26,7 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "14"
+QUERY_VER = "16"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -66,11 +66,13 @@ def accept_aerodrome(tags: dict[str, Any]) -> bool:
     if tags.get("aeroway") != "aerodrome":
         return False
     kind = str(tags.get("aerodrome") or "").lower()
-    return kind not in {"heliport", "airstrip", "helipad"}
+    if kind in {"heliport", "airstrip", "helipad"}:
+        return False
+    return bool(_tag(tags, "iata"))
 
 
 def accept_rail(tags: dict[str, Any]) -> bool:
-    """Rete di sicurezza: la query Overpass è già selettiva (niente dump railway=station)."""
+    """Solo hub: Wikipedia o nome noto o tante banchine. Wikidata da solo non basta."""
     railway = str(tags.get("railway") or "")
     station = str(tags.get("station") or "").lower()
     public = str(tags.get("public_transport") or "")
@@ -92,16 +94,33 @@ def accept_rail(tags: dict[str, Any]) -> bool:
         return False
     train_station = _yes(tags, "train") or tags.get("building") == "train_station" or bool(_tag(tags, "uic_ref"))
     if not train_station:
-        if railway != "station" or not accept_named(tags):
-            return False
-        if _yes(tags, "subway", "tram", "light_rail"):
-            return False
+        return False
     name = _tag(tags, "name:it", "name", "official_name").lower()
-    if any(bit in name for bit in ("bivio", "cabina", "deposito", "scalo merci", "terminali italia")):
+    if any(
+        bit in name
+        for bit in (
+            "bivio",
+            "cabina",
+            "deposito",
+            "scalo merci",
+            "terminali italia",
+            "ex stazione",
+            "fermata",
+        )
+    ):
         return False
     if str(tags.get("usage") or "").lower() in {"industrial", "military", "freight"}:
         return False
-    return True
+    try:
+        plats = int(str(_tag(tags, "platforms") or "0").split(";")[0])
+    except ValueError:
+        plats = 0
+    if any(hint in name for hint, _pts in _MAJOR_RAIL):
+        return True
+    if plats >= 6:
+        return True
+    hub = plats >= 4 or tags.get("building") == "train_station"
+    return bool(_tag(tags, "wikipedia")) and hub
 
 
 def accept_named(tags: dict[str, Any]) -> bool:
@@ -121,7 +140,31 @@ def accept_port(tags: dict[str, Any]) -> bool:
 
 
 def accept_stadium(tags: dict[str, Any]) -> bool:
-    return tags.get("leisure") == "stadium" and accept_named(tags)
+    if tags.get("leisure") != "stadium":
+        return False
+    name = _blob(_tag(tags, "name:it", "name", "alt_name", "old_name"))
+    if any(
+        bit in name
+        for bit in (
+            "palaghiaccio",
+            "palazzetto",
+            "palasport",
+            "pala ruffini",
+            "pala ",
+            "campo sportivo",
+            "ice",
+            "tennis",
+        )
+    ):
+        return False
+    sport = str(tags.get("sport") or "").lower()
+    if any(bit in sport for bit in ("ice_hockey", "curling", "tennis", "ice_skating")):
+        return False
+    if not accept_named(tags):
+        return False
+    if _tag(tags, "wikidata", "wikipedia", "capacity"):
+        return True
+    return "soccer" in sport or "football" in sport
 
 
 _GROCERY_MARKERS = (
@@ -158,14 +201,27 @@ _NAME_PREFIXES = (
     "nuovo complesso aziendale ",
 )
 _MAJOR_RAIL = (
-    ("centrale", 8),
-    ("porta nuova", 8),
-    ("termini", 8),
-    ("porta susa", 7),
-    ("porta garibaldi", 7),
-    ("lingotto", 7),
-    ("cadorna", 5),
-    ("lambrate", 4),
+    ("centrale", 10),
+    ("hauptbahnhof", 10),
+    ("termini", 10),
+    ("union station", 10),
+    ("grand central", 10),
+    ("penn station", 10),
+    ("gare du nord", 10),
+    ("king's cross", 10),
+    ("shinjuku", 10),
+    ("porta nuova", 9),
+    ("porta susa", 8),
+    ("porta garibaldi", 8),
+    ("lingotto", 8),
+    ("shibuya", 8),
+    ("ikebukuro", 7),
+    ("shinagawa", 7),
+    ("rogoredo", 6),
+    ("lambrate", 6),
+    ("cadorna", 6),
+    ("tiburtina", 6),
+    ("ostiense", 5),
 )
 
 
@@ -252,7 +308,22 @@ def accept_mall(tags: dict[str, Any]) -> bool:
     if any(mark in blob for mark in _GROCERY_MARKERS) or any(mark in blob for mark in _NOT_MALL):
         return False
     if shop == "mall":
-        return accept_named(tags)
+        notable = bool(_tag(tags, "wikidata", "wikipedia"))
+        if any(
+            token in blob
+            for token in (
+                "centro commerciale",
+                "shopville",
+                "outlet",
+                "gallerie",
+                "gallery",
+                "retail park",
+                "megashopping",
+                "le gru",
+            )
+        ):
+            notable = True
+        return notable and accept_named(tags)
     if shop == "department_store":
         if _tag(tags, "wikipedia", "wikidata"):
             return accept_named(tags)
@@ -277,26 +348,34 @@ def score_rail(row: dict[str, Any], tags: dict[str, Any]) -> int:
         extra += 2
         try:
             if int(str(_tag(tags, "platforms")).split(";")[0]) >= 5:
-                extra += 2
+                extra += 3
         except ValueError:
             pass
     if tags.get("public_transport") == "station":
         extra += 2
-    if row.get("wikidata") or _tag(tags, "wikidata"):
-        extra += 4
-    if row.get("wikipedia") or _tag(tags, "wikipedia"):
+    if tags.get("building") == "train_station" or row.get("building") == "train_station":
         extra += 3
+    if row.get("wikipedia") or _tag(tags, "wikipedia"):
+        extra += 4
+    elif row.get("wikidata") or _tag(tags, "wikidata"):
+        extra += 1
     name = _blob(row.get("name"), _tag(tags, "name:it", "name"))
     if name.startswith("ex ") or "ex stazione" in name:
         extra -= 12
+    major = False
     for hint, pts in _MAJOR_RAIL:
         if hint in name:
             extra += pts
+            major = True
             break
     clat, clon = row.get("_clat"), row.get("_clon")
     if isinstance(clat, (int, float)) and isinstance(clon, (int, float)):
         dist = ((float(row["lat"]) - float(clat)) ** 2 + (float(row["lon"]) - float(clon)) ** 2) ** 0.5
-        extra += max(0, 5 - int(dist * 80))
+        extra += max(0, 6 - int(dist * 90))
+        if not major:
+            extra -= int(dist * 140)
+            if dist > 0.07:
+                extra -= 16
     return extra
 
 
@@ -381,6 +460,8 @@ def score_mall(row: dict[str, Any], tags: dict[str, Any]) -> int:
 
 def score_land(_row: dict[str, Any], tags: dict[str, Any]) -> int:
     extra = 0
+    if _tag(tags, "wikipedia"):
+        extra += 5
     if _tag(tags, "wikidata"):
         extra += 4
     if tags.get("historic") in {"castle", "palace"}:
@@ -393,7 +474,7 @@ def score_land(_row: dict[str, Any], tags: dict[str, Any]) -> int:
 
 
 def importance_score(row: dict[str, Any]) -> int:
-    """Punteggio di importanza. Non è un dump: sceglie i 15–20 oggetti più parlanti."""
+    """Punteggio di importanza. Pochi oggetti, i più parlanti."""
     tags = row.get("tags") or {}
     cat = row.get("category") or ""
     extra: ScoreFn | None = (CATEGORIES.get(cat) or {}).get("score")
@@ -423,84 +504,98 @@ def importance_score(row: dict[str, Any]) -> int:
 
 # Clausole Overpass in stile Wizard: unione di AND, NOT come tag sulla stessa query.
 # primary = selettiva; fallback = un po' più larga, solo se i candidati sono pochi.
+# span = raggio in gradi intorno al centro del luogo (urbano stretto, aero/port più larghi).
 CATEGORIES: dict[str, dict[str, Any]] = {
     "aero": {
         "id": "aero",
         "emoji": "✈️",
         "title": "Aeroporti",
         "primary": ('nw["aeroway"="aerodrome"]["iata"]',),
-        "fallback": ('nw["aeroway"="aerodrome"]["name"]',),
+        "fallback": (),
         "accept": accept_aerodrome,
         "score": score_aero,
-        "out_limit": 12,
-        "fallback_min": 2,
+        "out_limit": 8,
+        "fallback_min": 1,
+        "min_score": 5,
+        "span": 0.55,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
         "title": "Stazioni principali",
-        "primary": ('nw["railway"="station"]["train"="yes"]',),
-        "fallback": ('nw["building"="train_station"]["name"]',),
+        "primary": ('nw["railway"="station"]["train"="yes"]["wikipedia"]',),
+        "fallback": ('nw["railway"="station"]["building"="train_station"]["name"]',),
         "accept": accept_rail,
         "score": score_rail,
-        "out_limit": 20,
-        "fallback_min": 4,
+        "out_limit": 12,
+        "fallback_min": 1,
+        "min_score": 16,
+        "span": 0.11,
     },
     "hosp": {
         "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
         "primary": ('nw["amenity"="hospital"]["emergency"="yes"]["name"]',),
-        "fallback": ('nw["amenity"="hospital"]["name"]',),
+        "fallback": ('nw["amenity"="hospital"]["emergency"="yes"]["wikidata"]',),
         "accept": accept_named,
         "score": score_hosp,
-        "out_limit": 15,
-        "fallback_min": 4,
+        "out_limit": 10,
+        "fallback_min": 1,
+        "min_score": 4,
+        "span": 0.12,
     },
     "port": {
         "id": "port",
         "emoji": "⚓",
         "title": "Porti",
-        "primary": ('nw["industrial"="port"]["name"]',),
-        "fallback": ('nw["landuse"="harbour"]["name"]',),
+        "primary": ('nw["industrial"="port"]["wikidata"]',),
+        "fallback": ('nw["landuse"="harbour"]["wikidata"]["name"]',),
         "accept": accept_port,
         "score": score_port,
-        "out_limit": 12,
-        "fallback_min": 2,
+        "out_limit": 8,
+        "fallback_min": 1,
+        "min_score": 6,
+        "span": 0.38,
     },
     "stad": {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "primary": ('rel["leisure"="stadium"]["name"]',),
-        "fallback": ('way["leisure"="stadium"]["name"]',),
+        "primary": ('rel["leisure"="stadium"]["wikidata"]',),
+        "fallback": ('way["leisure"="stadium"]["wikidata"]["sport"="soccer"]',),
         "accept": accept_stadium,
         "score": score_stad,
-        "out_limit": 15,
-        "fallback_min": 3,
+        "out_limit": 8,
+        "fallback_min": 1,
+        "min_score": 10,
+        "span": 0.13,
     },
     "mall": {
         "id": "mall",
         "emoji": "🏬",
         "title": "Centri commerciali",
-        "primary": ('nw["shop"="mall"]["name"]',),
-        "fallback": ('nw["shop"="mall"]["name"]',),
+        "primary": ('way["shop"="mall"]["wikidata"]',),
+        "fallback": ('rel["shop"="mall"]["wikidata"]',),
         "accept": accept_mall,
         "score": score_mall,
-        "out_limit": 12,
-        "fallback_min": 3,
+        "out_limit": 8,
+        "fallback_min": 1,
+        "min_score": 12,
+        "span": 0.15,
     },
     "land": {
         "id": "land",
         "emoji": "🏛️",
         "title": "Luoghi principali",
-        "primary": ('nw["tourism"="attraction"]["wikidata"]["name"]',),
-        "fallback": ('nw["historic"="castle"]["name"]',),
+        "primary": ('nw["tourism"="attraction"]["wikipedia"]["name"]',),
+        "fallback": ('nw["historic"="castle"]["wikipedia"]["name"]',),
         "accept": accept_named,
         "score": score_land,
-        "out_limit": 15,
-        "fallback_min": 4,
-        "fallback_min": 5,
+        "out_limit": 12,
+        "fallback_min": 1,
+        "min_score": 5,
+        "span": 0.12,
     },
 }
 
@@ -559,6 +654,15 @@ def parse_bbox(bbox: BBox | str | tuple[float, ...] | list[float]) -> BBox:
     return (south, west, north, east)
 
 
+def _scope_bbox(box: BBox, cat: str) -> BBox:
+    """Riquadro stretto sul centro: suburbio e comuni vicini restano fuori."""
+    south, west, north, east = box
+    clat = (south + north) / 2.0
+    clon = (west + east) / 2.0
+    span = float((CATEGORIES.get(cat) or {}).get("span") or 0.14)
+    return (clat - span, clon - span, clat + span, clon + span)
+
+
 def _bbox_ql(bbox: BBox) -> str:
     south, west, north, east = bbox
     return f"({south},{west},{north},{east})"
@@ -583,7 +687,7 @@ def peek(bbox: BBox | str, category: str) -> dict[str, Any] | None:
     if not cat:
         return None
     try:
-        box = parse_bbox(bbox)
+        box = _scope_bbox(parse_bbox(bbox), cat)
     except (TypeError, ValueError):
         return None
     hit = osm_cache.get(_cache_key(box, cat))
@@ -719,7 +823,7 @@ def build_query(bbox: BBox | str, category: str, *, fallback: bool = False, time
     cat = resolve_category(category)
     if not cat:
         raise ValueError(f"categoria sconosciuta: {category}")
-    box = parse_bbox(bbox)
+    box = _scope_bbox(parse_bbox(bbox), cat)
     meta = CATEGORIES[cat]
     clauses = tuple(meta["fallback"] if fallback else meta.get("primary") or meta.get("filters") or ())
     if not clauses:
@@ -763,7 +867,7 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
     if not cat:
         return {"ok": False, "error": f"categoria sconosciuta: {category}", "rows": [], "total": 0}
     try:
-        box = parse_bbox(bbox)
+        box = _scope_bbox(parse_bbox(bbox), cat)
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc), "rows": [], "total": 0}
 
@@ -774,6 +878,7 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
     meta = CATEGORIES[cat]
     pool_limit = int(meta.get("out_limit") or OUT_LIMIT)
     min_ok = int(meta.get("fallback_min") or FALLBACK_MIN)
+    floor = int(meta.get("min_score") or 0)
     query = build_query(box, cat, fallback=False, timeout=QUERY_TIMEOUT, limit=pool_limit)
     used_fallback = False
     t0 = time.time()
@@ -793,8 +898,16 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
             "retry": True,
         }
     t1 = time.time()
-    rows = _ingest(payload, category=cat, box=box)
-    timed("parse_rank", t1, cat=cat, n=len(rows))
+    ranked = _ingest(payload, category=cat, box=box)
+    timed("parse_rank", t1, cat=cat, n=len(ranked))
+
+    def _floor(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not floor:
+            return items
+        return [r for r in items if int(r.get("score") or 0) >= floor]
+
+    rows = _floor(ranked)
+    pool = len(ranked)
     fallback_clauses = tuple(meta.get("fallback") or ())
     if len(rows) < min_ok and fallback_clauses and fallback_clauses != tuple(meta.get("primary") or ()):
         q2 = build_query(box, cat, fallback=True, timeout=QUERY_TIMEOUT, limit=pool_limit)
@@ -803,14 +916,15 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         timed("overpass", t2, cat=cat, fallback=1, ok=int(bool(p2.get("ok"))))
         if p2.get("ok"):
             extra = _ingest(p2, category=cat, box=box)
-            by_id = {r["id"]: r for r in rows}
+            by_id = {r["id"]: r for r in ranked}
             for item in extra:
                 by_id.setdefault(item["id"], item)
-            rows = list(by_id.values())
-            rows.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+            ranked = list(by_id.values())
+            ranked.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+            rows = _floor(ranked)
+            pool = len(ranked)
             query = q2
             used_fallback = True
-    pool = len(rows)
     rows = rows[:PAGE_CAP]
     for item in rows:
         item.pop("tags", None)

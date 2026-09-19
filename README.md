@@ -13,7 +13,7 @@ Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo
 5. Deduplica + ranking di categoria → **10** risultati
 6. Cache geocoding e categoria+luogo; timeout Overpass con Riprova, senza martellare
 
-Le **stazioni principali** chiedono `train=yes` / `uic_ref` / `building=train_station` e NOT subway/tram/platform/halt. Non scaricano `railway=station` nudo.
+Le **stazioni principali** chiedono `train=yes` + Wikipedia (o edificio stazione) e scartano subway/tram/platform/halt e le code suburbane. Non scaricano `railway=station` nudo. Ogni categoria usa un riquadro stretto sul centro, ranking e tetto di **10** risultati.
 
 ## Avvio locale
 

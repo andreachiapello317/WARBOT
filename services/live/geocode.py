@@ -43,7 +43,7 @@ def _get_json(url: str, headers: dict[str, str] | None = None, timeout: int = 8)
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _bbox_from_point(lat: float, lon: float, span: float = 0.35) -> BBox:
+def _bbox_from_point(lat: float, lon: float, span: float = 0.22) -> BBox:
     return (lat - span, lon - span, lat + span, lon + span)
 
 
@@ -53,8 +53,8 @@ def _usable_bbox(lat: float, lon: float, bbox: BBox | None) -> tuple[BBox, str]:
     south, west, north, east = bbox
     if south >= north or west >= east:
         return _bbox_from_point(lat, lon), ""
-    if (north - south) > 1.2 or (east - west) > 1.2:
-        return _bbox_from_point(lat, lon, 0.4), "area intorno al centro (il riquadro intero è troppo largo per Overpass)"
+    if (north - south) > 0.7 or (east - west) > 0.7:
+        return _bbox_from_point(lat, lon, 0.22), "area intorno al centro (il riquadro intero è troppo largo per Overpass)"
     return bbox, ""
 
 
