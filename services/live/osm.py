@@ -19,15 +19,16 @@ USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
 DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 18, lo=8, hi=30)
 QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 14, lo=6, hi=25)
 OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 2, lo=1, hi=3)
-OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=8, hi=120)
-LIST_LIMIT = 12
-QUERY_VER = "3"
+OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
+RESULT_LIMIT = osm_cache.int_env("OSM_RESULT_LIMIT", 20, lo=10, hi=30)
+LIST_LIMIT = RESULT_LIMIT
+QUERY_VER = "4"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
 
 AcceptFn = Callable[[dict[str, Any]], bool]
-RankFn = Callable[[dict[str, Any]], tuple]
+ScoreFn = Callable[[dict[str, Any], dict[str, Any]], int]
 
 
 def e(text: Any) -> str:
@@ -64,23 +65,14 @@ def accept_aerodrome(tags: dict[str, Any]) -> bool:
     return kind not in {"heliport", "airstrip", "helipad"}
 
 
-def rank_aerodrome(row: dict[str, Any]) -> tuple:
-    return (
-        0 if row.get("iata") else 1,
-        0 if row.get("icao") else 1,
-        0 if row.get("wikidata") else 1,
-        row["name"].lower(),
-    )
-
-
 def accept_rail(tags: dict[str, Any]) -> bool:
-    """Rete di sicurezza: la query Overpass è già selettiva."""
+    """Rete di sicurezza: la query Overpass è già selettiva (niente dump railway=station)."""
     railway = str(tags.get("railway") or "")
     station = str(tags.get("station") or "").lower()
     public = str(tags.get("public_transport") or "")
     if railway in {"halt", "tram_stop", "subway_entrance", "platform", "stop", "halt_position", "tram"}:
         return False
-    if public in {"stop_position", "platform", "stop_area"}:
+    if public in {"stop_position", "platform"}:
         return False
     if tags.get("highway") == "bus_stop":
         return False
@@ -105,32 +97,134 @@ def accept_rail(tags: dict[str, Any]) -> bool:
     return True
 
 
-def rank_rail(row: dict[str, Any]) -> tuple:
-    tags = row.get("tags") or {}
-    return (
-        0 if _tag(tags, "uic_ref") else 1,
-        0 if _yes(tags, "train") else 1,
-        0 if tags.get("building") == "train_station" else 1,
-        0 if row.get("wikidata") or row.get("wikipedia") else 1,
-        row["name"].lower(),
-    )
-
-
 def accept_named(tags: dict[str, Any]) -> bool:
     return bool(_tag(tags, "name:it", "name", "official_name"))
 
 
-def rank_wiki(row: dict[str, Any]) -> tuple:
-    return (
-        0 if row.get("wikidata") else 1,
-        0 if row.get("wikipedia") else 1,
-        0 if row.get("website") else 1,
-        row["name"].lower(),
-    )
+def accept_port(tags: dict[str, Any]) -> bool:
+    if tags.get("leisure") == "marina":
+        return False
+    if tags.get("man_made") in {"pier", "jetty", "quay", "slipway", "breakwater"}:
+        return False
+    if str(tags.get("harbour") or "").lower() in {"basin", "pier", "marina"}:
+        return False
+    if tags.get("mooring") and tags.get("industrial") != "port":
+        return False
+    return accept_named(tags)
 
 
-# Filtri Overpass: una categoria per tap. south,west,north,east nel QL.
-# nw (niente relations) + tag selettivi + out center LIMIT. Niente download-tutto.
+def accept_stadium(tags: dict[str, Any]) -> bool:
+    return tags.get("leisure") == "stadium" and accept_named(tags)
+
+
+def accept_mall(tags: dict[str, Any]) -> bool:
+    return tags.get("shop") in {"mall", "department_store"} and accept_named(tags)
+
+
+def score_aero(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    kind = str(tags.get("aerodrome") or tags.get("aerodrome:type") or "").lower()
+    if "international" in kind:
+        extra += 3
+    if _tag(tags, "wikidata"):
+        extra += 2
+    return extra
+
+
+def score_rail(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    if _tag(tags, "platforms"):
+        extra += 2
+    if tags.get("public_transport") == "station":
+        extra += 2
+    return extra
+
+
+def score_hosp(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    if _yes(tags, "emergency") or str(tags.get("emergency") or "").lower() == "yes":
+        extra += 4
+    if _tag(tags, "beds"):
+        extra += 3
+    if _tag(tags, "wikidata"):
+        extra += 2
+    return extra
+
+
+def score_port(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    if tags.get("industrial") == "port":
+        extra += 4
+    if tags.get("landuse") in {"port", "harbour"}:
+        extra += 3
+    if _yes(tags, "harbour") or tags.get("harbour") == "yes":
+        extra += 2
+    if _tag(tags, "wikidata"):
+        extra += 2
+    return extra
+
+
+def score_stad(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    if _tag(tags, "capacity"):
+        extra += 3
+    if _tag(tags, "wikidata"):
+        extra += 3
+    return extra
+
+
+def score_mall(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    if tags.get("shop") == "mall":
+        extra += 3
+    elif tags.get("shop") == "department_store":
+        extra += 1
+    if _tag(tags, "wikidata"):
+        extra += 2
+    return extra
+
+
+def score_land(_row: dict[str, Any], tags: dict[str, Any]) -> int:
+    extra = 0
+    if _tag(tags, "wikidata"):
+        extra += 4
+    if tags.get("historic") in {"castle", "palace"}:
+        extra += 3
+    if tags.get("building") == "cathedral":
+        extra += 3
+    if tags.get("amenity") == "townhall":
+        extra += 2
+    return extra
+
+
+def importance_score(row: dict[str, Any]) -> int:
+    """Punteggio di importanza. Non è un dump: sceglie i 15–20 oggetti più parlanti."""
+    tags = row.get("tags") or {}
+    score = 0
+    if row.get("iata") or _tag(tags, "iata"):
+        score += 5
+    if row.get("icao") or _tag(tags, "icao"):
+        score += 5
+    if row.get("uic") or _tag(tags, "uic_ref"):
+        score += 4
+    if _yes(tags, "train") or str(row.get("train") or "").lower() in {"yes", "1", "true"}:
+        score += 3
+    if tags.get("building") == "train_station" or row.get("building") == "train_station":
+        score += 3
+    if row.get("operator") or _tag(tags, "operator"):
+        score += 2
+    if row.get("website") or _tag(tags, "website", "contact:website"):
+        score += 2
+    if row.get("wikipedia") or _tag(tags, "wikipedia"):
+        score += 1
+    extra: ScoreFn | None = (CATEGORIES.get(row.get("category") or "") or {}).get("score")
+    if extra:
+        score += extra(row, tags)
+    return score
+
+
+# Filtri Overpass a livelli: tag indicizzati, niente nwr["railway"="station"] nudo.
+# Union dal più specifico al più largo; Python fa solo ranking sul pool già selettivo.
 CATEGORIES: dict[str, dict[str, Any]] = {
     "aero": {
         "id": "aero",
@@ -138,32 +232,44 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "title": "Aeroporti",
         "filters": (
             'nw["aeroway"="aerodrome"]["iata"]',
+            'nw["aeroway"="aerodrome"]["icao"]',
+            'nw["aeroway"="aerodrome"]["aerodrome"="international"]',
+            'nw["aeroway"="aerodrome"]["name"]["website"]',
             'nw["aeroway"="aerodrome"]["name"]',
         ),
         "accept": accept_aerodrome,
-        "rank": rank_aerodrome,
-        "out_limit": 24,
+        "score": score_aero,
+        "out_limit": 40,
     },
     "rail": {
         "id": "rail",
         "emoji": "🚆",
         "title": "Stazioni principali",
         "filters": (
-            'nw["railway"="station"]["train"="yes"]',
+            'nw["railway"="station"]["uic_ref"]',
             'nw["building"="train_station"]["name"]',
+            'nw["railway"="station"]["train"="yes"]["operator"]',
+            'nw["railway"="station"]["train"="yes"]["platforms"]',
+            'nw["railway"="station"]["train"="yes"]',
         ),
         "accept": accept_rail,
-        "rank": rank_rail,
-        "out_limit": 40,
+        "score": score_rail,
+        "out_limit": 80,
     },
     "hosp": {
         "id": "hosp",
         "emoji": "🏥",
         "title": "Ospedali",
-        "filters": ('nw["amenity"="hospital"]["name"]',),
+        "filters": (
+            'nw["amenity"="hospital"]["emergency"="yes"]["name"]',
+            'nw["amenity"="hospital"]["beds"]["name"]',
+            'nw["amenity"="hospital"]["operator"]["name"]',
+            'nw["amenity"="hospital"]["website"]["name"]',
+            'nw["amenity"="hospital"]["name"]',
+        ),
         "accept": accept_named,
-        "rank": rank_wiki,
-        "out_limit": 40,
+        "score": score_hosp,
+        "out_limit": 50,
     },
     "port": {
         "id": "port",
@@ -171,21 +277,25 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "title": "Porti",
         "filters": (
             'nw["industrial"="port"]["name"]',
+            'nw["landuse"="port"]["name"]',
             'nw["landuse"="harbour"]["name"]',
             'nw["harbour"="yes"]["name"]',
         ),
-        "accept": accept_named,
-        "rank": rank_wiki,
-        "out_limit": 24,
+        "accept": accept_port,
+        "score": score_port,
+        "out_limit": 40,
     },
     "stad": {
         "id": "stad",
         "emoji": "🏟️",
         "title": "Stadi",
-        "filters": ('nw["leisure"="stadium"]["name"]',),
-        "accept": accept_named,
-        "rank": rank_wiki,
-        "out_limit": 30,
+        "filters": (
+            'nw["leisure"="stadium"]["wikidata"]["name"]',
+            'nw["leisure"="stadium"]["name"]',
+        ),
+        "accept": accept_stadium,
+        "score": score_stad,
+        "out_limit": 40,
     },
     "mall": {
         "id": "mall",
@@ -195,9 +305,9 @@ CATEGORIES: dict[str, dict[str, Any]] = {
             'nw["shop"="mall"]["name"]',
             'nw["shop"="department_store"]["name"]',
         ),
-        "accept": accept_named,
-        "rank": rank_wiki,
-        "out_limit": 30,
+        "accept": accept_mall,
+        "score": score_mall,
+        "out_limit": 40,
     },
     "land": {
         "id": "land",
@@ -212,8 +322,8 @@ CATEGORIES: dict[str, dict[str, Any]] = {
             'nw["building"="cathedral"]["name"]',
         ),
         "accept": accept_named,
-        "rank": rank_wiki,
-        "out_limit": 40,
+        "score": score_land,
+        "out_limit": 50,
     },
 }
 
@@ -444,9 +554,8 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
 
     meta = CATEGORIES[cat]
     filters = tuple(meta["filters"])
-    rank: RankFn = meta.get("rank") or (lambda r: (r["name"].lower(),))
-    limit = int(meta.get("out_limit") or OUT_LIMIT)
-    query = _build_query(box, filters, timeout=QUERY_TIMEOUT, limit=limit)
+    pool_limit = int(meta.get("out_limit") or OUT_LIMIT)
+    query = _build_query(box, filters, timeout=QUERY_TIMEOUT, limit=pool_limit)
     payload = overpass(query, timeout=timeout)
     if not payload.get("ok"):
         return {
@@ -469,28 +578,18 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         if not item or item["id"] in seen:
             continue
         seen.add(item["id"])
+        item["score"] = importance_score(item)
         rows.append(item)
     merged: dict[tuple, dict[str, Any]] = {}
     for item in rows:
         key = (item["name"].lower(), round(item["lat"], 3), round(item["lon"], 3))
         prev = merged.get(key)
-        if prev is None:
-            merged[key] = item
-            continue
-
-        def score(r: dict[str, Any]) -> tuple:
-            return (
-                bool(r.get("uic")),
-                bool(r.get("iata")),
-                bool(r.get("wikidata")),
-                bool(r.get("website")),
-                r.get("osm_type") == "way",
-            )
-
-        if score(item) > score(prev):
+        if prev is None or int(item.get("score") or 0) > int(prev.get("score") or 0):
             merged[key] = item
     rows = list(merged.values())
-    rows.sort(key=rank)
+    rows.sort(key=lambda r: (-int(r.get("score") or 0), r["name"].lower()))
+    pool = len(rows)
+    rows = rows[:RESULT_LIMIT]
     for item in rows:
         item.pop("tags", None)
     bundle = {
@@ -501,6 +600,7 @@ def search(bbox: BBox | str, category: str, *, timeout: int = DEFAULT_TIMEOUT) -
         "bbox": box,
         "rows": rows,
         "total": len(rows),
+        "pool": pool,
         "source": "OpenStreetMap / Overpass",
         "ts": time.time(),
         "query": query,
@@ -578,9 +678,15 @@ def format_osm_category(bundle: dict[str, Any], place: dict[str, Any] | None = N
     if place:
         where = f" · {e(place.get('display') or place.get('name'))}"
     cached = " · cache" if bundle.get("cached") else ""
+    pool = int(bundle.get("pool") or bundle.get("total") or 0)
+    shown = len(bundle.get("rows") or [])
+    if pool > shown:
+        tally = f"{shown} principali su {pool} nel riquadro{cached}"
+    else:
+        tally = f"{bundle.get('total', 0)} principali{cached}"
     lines = [
         f"{bundle.get('emoji', '🗺️')} <b>{e(bundle.get('title'))}</b>{where}",
-        f"{bundle.get('total', 0)} elementi{cached} · tocca una scheda",
+        f"{tally} · tocca una scheda",
         "",
     ]
     rows = bundle.get("rows") or []

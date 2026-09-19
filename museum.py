@@ -230,10 +230,10 @@ def render_category(place: dict, cat: str) -> str:
             "lon": r["lon"],
             "label": f"<b>{html.escape(r['name'])}</b>",
         }
-        for r in rows[:80]
+        for r in rows
     ]
     table_rows = []
-    for r in rows[:40]:
+    for r in rows:
         extra = " / ".join(p for p in (r.get("iata"), r.get("icao"), r.get("uic")) if p)
         table_rows.append(
             "<tr>"
@@ -250,9 +250,15 @@ def render_category(place: dict, cat: str) -> str:
         if table_rows
         else "<p class='empty'>Niente in questa categoria nel riquadro.</p>"
     )
+    shown = int(bundle.get("total") or 0)
+    pool = int(bundle.get("pool") or shown)
+    if pool > shown:
+        lead = f"{shown} principali su {pool} nel riquadro. Query selettiva, ordinati per importanza OSM."
+    else:
+        lead = f"{shown} principali. Query selettiva, ordinati per importanza OSM."
     body = (
         f"<h1>{meta['emoji']} {h(meta['title'])} · {h(place.get('display') or '')}</h1>"
-        f"<p class='lead'>{bundle.get('total', 0)} elementi. Overpass solo su questa categoria.</p>"
+        f"<p class='lead'>{h(lead)}</p>"
         f'<p><a class="chip" href="/luogo?{qs}">📍 Località</a> <a class="chip" href="/mappa?{qs}">🗺️ Mappa</a></p>'
         + _leaflet(points, (place["lat"], place["lon"]), 12)
         + table
@@ -279,7 +285,7 @@ def render_help() -> str:
     <p class="lead">OSM WORLD è solo questo: cerchi un luogo, scegli una categoria, Overpass risponde.</p>
     <div class="grid">
       <div class="card"><h2>🔎 Luogo</h2><p>Geocoder OSM (Photon, Nominatim in fallback), con cache. Non scarica la città intera.</p></div>
-      <div class="card"><h2>🚆 Stazioni principali</h2><p>Treni passeggeri: train=yes, UIC, train_station. Niente metro, tram, bus, piattaforme, fermate.</p></div>
+      <div class="card"><h2>🚆 Stazioni principali</h2><p>Query a livelli: UIC, train_station, train=yes. Poi ranking. Niente metro, tram, bus, piattaforme.</p></div>
       <div class="card"><h2>🗺️ Mappa</h2><p>Foglio OpenStreetMap del riquadro. Le liste restano Overpass per categoria.</p></div>
     </div>
     """

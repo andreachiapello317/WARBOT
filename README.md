@@ -8,11 +8,11 @@ Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo
 
 1. Scrivi Tokyo, Parigi, Milano… — solo geocoding, nessuna query Overpass
 2. 📍 Località e menu categorie, subito
-3. Tocca una categoria: una query Overpass selettiva (`[out:json]`, timeout, limite)
-4. Lista → scheda (coordinate, sito, Wikipedia, Wikidata)
+3. Tocca una categoria: query Overpass selettiva (`[out:json]`, timeout, pool limitato)
+4. Ranking di importanza (IATA, UIC, operator, Wikipedia…) → al massimo 20 risultati
 5. Stessa città + stessa categoria in cache: niente nuova richiesta Overpass
 
-Le **stazioni principali** tengono `train=yes`, `building=train_station`, UIC. Fuori subway, metro, tram, light rail, bus_stop, platform, ingressi, fermate minori.
+Le **stazioni principali** chiedono `uic_ref`, `building=train_station`, `train=yes` (+ operator/platforms). Non scaricano `railway=station` nudo, né halt, platform, subway, tram, bus_stop.
 
 ## Avvio locale
 
