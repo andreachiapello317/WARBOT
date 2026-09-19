@@ -33,10 +33,11 @@ log = logging.getLogger("warbot.osm")
 
 TELEGRAM_MAX_LEN = 3900
 
-OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_FALLBACK_URLS = (
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
 )
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
 DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 8, lo=5, hi=20)
@@ -1123,7 +1124,7 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
                 _mark_host(host, ok=False)
                 break
             except urllib.error.HTTPError as exc:
-                last_error = f"HTTP {exc.code}"
+                last_error = "Overpass non raggiungibile"
                 last_detail = str(exc)
                 log.warning("overpass http=%s host=%s", exc.code, host)
                 if exc.code in {404, 429, 502, 503, 504}:
@@ -1665,8 +1666,7 @@ def format_osm_category(bundle: dict[str, Any], place: dict[str, Any] | None = N
     if not bundle.get("ok"):
         return (
             "🌍 <b>OSM WORLD</b>\n\n"
-            "Overpass non ha risposto. Riprova tra un attimo.\n"
-            f"<i>{e(bundle.get('error') or 'timeout')}</i>"
+            "Overpass non ha risposto. Riprova tra un attimo."
         )
     where = e((place or {}).get("display") or (place or {}).get("name") or "")
     city = where.upper() if where else ""

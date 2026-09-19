@@ -6,11 +6,13 @@ import unittest
 
 from services.live.engine import PAGE_CAP, PAGE_SIZE
 from services.live.osm import (
+    OVERPASS_FALLBACK_URLS,
     OVERPASS_URL,
     accept_aerodrome,
     accept_hospital,
     accept_rail,
     build_osm_query,
+    format_osm_category,
     importance_score,
     normalize_element,
 )
@@ -22,8 +24,17 @@ CENTER = (45.464, 9.19)
 
 
 class QueryBuilderTest(unittest.TestCase):
-    def test_endpoint_mail_ru(self) -> None:
-        self.assertEqual(OVERPASS_URL, "https://maps.mail.ru/osm/tools/overpass/api/interpreter")
+    def test_endpoint_overpass_primary(self) -> None:
+        self.assertEqual(OVERPASS_URL, "https://overpass-api.de/api/interpreter")
+        self.assertEqual(OVERPASS_FALLBACK_URLS[0], OVERPASS_URL)
+        self.assertIn("maps.mail.ru", OVERPASS_FALLBACK_URLS[1])
+        self.assertIn("overpass.osm.ch", OVERPASS_FALLBACK_URLS[2])
+
+    def test_error_hides_http_status(self) -> None:
+        text = format_osm_category({"ok": False, "error": "HTTP 404"}, {"name": "Milano"})
+        self.assertIn("Overpass non ha risposto", text)
+        self.assertNotIn("404", text)
+        self.assertNotIn("HTTP", text)
 
     def test_page_size_twenty(self) -> None:
         self.assertEqual(PAGE_SIZE, 20)

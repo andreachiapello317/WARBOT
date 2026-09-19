@@ -65,7 +65,7 @@ museum.py                   Web OSM WORLD (invariato)
 
 Callback: `city:ask`, `world:list`, `world:osm`, `world:opensky`, `osm:rail`, `osm:rail:page:2`, `opensky:aircraft`, `opensky:aircraft:page:1`.
 
-Overpass primary: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Failover già nel client Overpass.
+Overpass primary: `https://overpass-api.de/api/interpreter`. Failover: maps.mail.ru, overpass.osm.ch. GET `/` e `/health` sul webhook rispondono 200 (Render non deve vedere 404).
 
 OpenSky: [documentazione ufficiale](https://openskynetwork.github.io/opensky-api/) — `GET /api/states/all` con bbox.
 

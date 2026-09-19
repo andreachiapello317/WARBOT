@@ -27,6 +27,7 @@ from telegram.ext import (
     filters,
 )
 
+from core.webhook import install_health_routes, resolve_webhook
 from core.session import (
     SCREEN_OPENSKY_MENU,
     SCREEN_OPENSKY_RESULTS,
@@ -255,9 +256,9 @@ def main() -> None:
     webhook_url = (os.getenv("WEBHOOK_URL") or "").strip()
     if webhook_url:
         port = int(os.getenv("PORT") or "10000")
-        url_path = (os.getenv("WEBHOOK_PATH") or "webhook").strip().strip("/")
+        url_path, public_url = resolve_webhook(webhook_url, os.getenv("WEBHOOK_PATH"))
         secret = (os.getenv("WEBHOOK_SECRET") or "").strip() or None
-        public_url = f"{webhook_url.rstrip('/')}/{url_path}"
+        install_health_routes()
         logger.info("Avvio in modalità WEBHOOK su porta %s → %s", port, public_url)
         application.run_webhook(
             listen="0.0.0.0",
