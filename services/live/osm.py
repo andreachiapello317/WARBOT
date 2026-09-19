@@ -33,11 +33,11 @@ log = logging.getLogger("warbot.osm")
 
 TELEGRAM_MAX_LEN = 3900
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_URL = "https://overpass.osm.ch/api/interpreter"
 OVERPASS_FALLBACK_URLS = (
+    "https://overpass.osm.ch/api/interpreter",
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
 )
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
 DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 8, lo=5, hi=20)
@@ -47,10 +47,9 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "31"
+QUERY_VER = "32"
 DEDUP_METERS = 180
 HOST_COOLDOWN = 180
-EMPTY_CACHE_TTL = 60
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -1097,7 +1096,7 @@ def peek(
     except (TypeError, ValueError):
         return None
     hit = osm_cache.get(_cache_key(box, cat, extra))
-    if isinstance(hit, dict) and hit.get("ok"):
+    if isinstance(hit, dict) and hit.get("ok") and hit.get("rows"):
         return _copy_bundle(hit, cached=True)
     return None
 
@@ -1131,10 +1130,14 @@ def _overpass_failed_remark(payload: dict[str, Any]) -> bool:
 
 
 def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """POST application/x-www-form-urlencoded, parametro data=. Timeout: stop, Riprova manuale."""
+    """POST application/x-www-form-urlencoded, parametro data=. Timeout: stop, Riprova manuale.
+
+    200 con elements=[] non è un successo: si passa al prossimo interpreter.
+    """
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
     last_error = "Overpass non ha risposto"
     last_detail = ""
+    last_empty: dict[str, Any] | None = None
     urls = _overpass_urls()
     for index, url in enumerate(urls):
         host = urllib.parse.urlparse(url).netloc or "overpass"
@@ -1176,9 +1179,12 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
                     payload = json.loads(raw.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                     log.warning("overpass json invalid host=%s", host)
-                    return {"ok": False, "error": "JSON Overpass non valido", "detail": str(exc), "elements": []}
+                    last_error = "JSON Overpass non valido"
+                    last_detail = str(exc)
+                    break
                 if not isinstance(payload, dict):
-                    return {"ok": False, "error": "payload Overpass inatteso", "elements": []}
+                    last_error = "payload Overpass inatteso"
+                    break
                 remark = str(payload.get("remark") or "")
                 if _overpass_failed_remark(payload):
                     last_error = "timeout Overpass"
@@ -1186,12 +1192,20 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
                     log.warning("overpass remark host=%s", host)
                     _mark_host(host, ok=False)
                     break
-                payload["ok"] = True
                 payload.setdefault("elements", [])
+                if not payload.get("elements"):
+                    log.info("overpass empty host=%s try_next=%s", host, index < len(urls) - 1)
+                    last_empty = payload
+                    break
+                payload["ok"] = True
                 _mark_host(host, ok=True)
                 return payload
             if attempt < OVERPASS_RETRIES - 1:
                 time.sleep(0.4 * (attempt + 1))
+    if last_empty is not None:
+        last_empty["ok"] = True
+        last_empty.setdefault("elements", [])
+        return last_empty
     return {"ok": False, "error": last_error, "detail": last_detail, "elements": [], "retry": True}
 
 
@@ -1557,6 +1571,33 @@ def search(
             pool = len(ranked)
             query = q2
             used_fallback = True
+    if not rows and here and not around:
+        around_retry = int(meta.get("radius_m") or 12000)
+        t_around = time.time()
+        q_around = build_osm_query(
+            cat,
+            raw_box,
+            pool_limit,
+            fallback=False,
+            timeout=QUERY_TIMEOUT,
+            center=here,
+            around_m=around_retry,
+        )
+        p3 = overpass(q_around, timeout=timeout)
+        timed(
+            "overpass_http",
+            t_around,
+            cat=cat,
+            around_retry=1,
+            ok=int(bool(p3.get("ok"))),
+            n=len(p3.get("elements") or []),
+        )
+        if p3.get("ok") and p3.get("elements"):
+            ranked = _ingest(p3, category=cat, box=box, hint=str(hint or ""))
+            rows = _floor(ranked)
+            pool = len(ranked)
+            query = q_around
+            used_fallback = True
     if cat == "aero" and not around:
         rows = _trim_airports(rows)
     rows = rows[:PAGE_CAP]
@@ -1581,11 +1622,12 @@ def search(
         "cached": False,
         "around": around,
     }
-    osm_cache.put(
-        _cache_key(box, cat, extra),
-        {k: v for k, v in bundle.items() if k != "cached"},
-        osm_cache.OVERPASS_TTL if rows else EMPTY_CACHE_TTL,
-    )
+    if rows:
+        osm_cache.put(
+            _cache_key(box, cat, extra),
+            {k: v for k, v in bundle.items() if k != "cached"},
+            osm_cache.OVERPASS_TTL,
+        )
     log.debug("osm search cat=%s n=%d fallback=%s", cat, len(rows), used_fallback)
     return bundle
 
