@@ -1,23 +1,26 @@
-# WARBOT — OSM WORLD
+# WARBOT — città, mondi, query
 
-Cerca una località nel mondo, scegli una categoria, Overpass risponde. Bot Telegram e mappa web.
+START chiede una località. Il geocoding crea il **CityContext** (nome, lat, lon, bbox). Poi il menu dei mondi. Ogni mondo ha le sue query. Passare da OSM a OpenSky **non** rifà il geocoding.
 
-Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo** quando tocchi una categoria. Geocoding e risultati categoria restano in cache (memoria + `data/osm_cache.json`) con TTL configurabile.
+```
+🌍 WARBOT
+   → 📍 CITTÀ (geocoding una volta)
+      → 🌎 MONDI
+         → 🗺️ OSM WORLD     → query Overpass
+         → ✈️ OPEN SKY      → query OpenSky
+```
 
 ## Flusso
 
-1. Scrivi Tokyo, Parigi, Milano… — solo geocoding, nessuna query Overpass
-2. 📍 Località e menu categorie, subito
-3. Tocca una categoria: Overpass QL selettivo sul punto
-4. Lista ordinata per rilevanza OSM (operator, binari, sito, mappa)
-5. Scheda del risultato: dove si trova, dati OSM, mappa, **cosa c'è vicino**, esplora zona
-6. I dintorni usano `around` Overpass **una categoria alla volta**
-7. Filtri Telegram su stazioni (principali/tutte, centro/città) e aeroporti (passeggeri/tutti/vicino)
-8. Frasi tipo `stazioni vicino al Duomo` o `aeroporti Milano`
+1. `/start` — «Inserisci una città o località»
+2. Scrivi Milano — solo geocoding, **né Overpass né OpenSky**
+3. 📍 Milano → scegli un mondo
+4. 🗺️ OSM WORLD → menu categorie (ancora nessuna query)
+5. 🚆 Stazioni → **solo** Overpass
+6. ✈️ OPEN SKY → menu (nessuna query)
+7. ✈️ Aerei LIVE → **solo** OpenSky, stesse lat/lon
 
-Overpass Turbo **non** è l'endpoint: è solo il modello mentale (Wizard AND/OR, corso «oltre il wizard»). Runtime: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Niente scorciatoie `{{bbox}}` / `{{geocodeArea}}`.
-
-Le **stazioni ferroviarie** chiedono `railway=station` + `train=yes`, escludono subway/tram/halt/platform/bus in query e in filtro. `out center N` restituisce centroide e tag, senza recurse sui membri. Se l'interpreter risponde 504 si prova un secondo host. Un timeout sul primo host (6s) non blocca: si tenta il secondo, poi Riprova.
+⬅️ OSM / ⬅️ OpenSky torna al menu del mondo. 🌍 Mondi torna al menu globale. 📍 Cambia città torna a START.
 
 ## Avvio locale
 
@@ -26,40 +29,41 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-python museum.py
+python bot.py
 ```
 
-Apri `http://127.0.0.1:47261`.
+Mappa web OSM: `python museum.py` → `http://127.0.0.1:47261`.
 
-Bot Telegram: `TELEGRAM_BOT_TOKEN` in `.env`, poi `python bot.py`.
-
-Senza `WEBHOOK_URL` parte in polling. In produzione (Render) imposta `WEBHOOK_URL` HTTPS senza slash finale. Start command: `python bot.py`. Non avviare il polling in locale se il webhook è già attivo.
+Senza `WEBHOOK_URL` il bot parte in polling. In produzione (Render) imposta `WEBHOOK_URL` HTTPS senza slash finale. Start command: `python bot.py`. Non avviare il polling in locale se il webhook è già attivo.
 
 ## Comandi
 
 ```
-start - OSM WORLD
+start - Inserisci una città
 osm - OSM WORLD (opzionale: /osm Tokyo)
+opensky - OPEN SKY
 aiuto - Come funziona
 ```
-
-In chat puoi anche scrivere solo il nome del luogo.
 
 ## Architettura
 
 ```
-bot.py                    Telegram: un messaggio, callback live:ow
-museum.py                 Web OSM WORLD (porta 47261)
-ui/keyboards.py           Tastiere
-ui/texts.py               Aiuto
-services/live/geocode.py  Photon (fail-fast) / Nominatim, cache
-services/live/engine.py   Compilatore Overpass QL (AND/union/difference/around; non Turbo)
-services/live/osm.py      Categorie, ranking, fallback, cache
-services/live/cache.py    Cache memoria + file, TTL
+bot.py                      Telegram: città, sessione, dispatch ai mondi
+core/session.py             CityContext + schermo/mondo
+core/telegram.py            Un messaggio: edit, RetryAfter, un solo send
+worlds/registry.py          Registry OSM + OpenSky
+worlds/city.py              START, geocoding, WORLD MENU
+worlds/osm/                 Menu + query wrapper → services/live/osm.py
+worlds/opensky/             Menu + query wrapper → services/live/aircraft.py
+services/live/geocode.py    Photon / Nominatim
+services/live/engine.py     Compilatore Overpass QL
+services/live/osm.py        Motore OSM (filtri, ranking, cache, failover)
+services/live/aircraft.py   Client OpenSky GET /states/all
+museum.py                   Web OSM WORLD (invariato)
 ```
 
-Callback: `live:ow`, `live:ow:c:rail`, `live:ow:i:0`, `live:ow:map`, `nav:back`, `home:menu`.
+Callback: `city:ask`, `world:list`, `world:osm`, `world:opensky`, `osm:rail`, `osm:rail:page:2`, `opensky:aircraft`, `opensky:aircraft:page:1`.
 
-Geocoder: `OSM_GEOCODER=photon` (default) o `nominatim`. `OSM_GEOCODER_URL` per un'istanza tua.
+Overpass primary: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Failover già nel client Overpass.
 
-Cache: `OSM_CACHE_TTL_GEOCODE` (default 6h), `OSM_CACHE_TTL_OVERPASS` (default 3h), `OSM_CACHE_FILE`.
+OpenSky: [documentazione ufficiale](https://openskynetwork.github.io/opensky-api/) — `GET /api/states/all` con bbox. OAuth2 opzionale: `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`.

@@ -1601,7 +1601,11 @@ def format_osm_hits(query: str, hits: list[dict[str, Any]]) -> str:
     return clip("\n".join(lines))
 
 
-def format_osm_place(place: dict[str, Any]) -> str:
+def format_osm_place(
+    place: dict[str, Any],
+    *,
+    live_feeds: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+) -> str:
     note = place.get("bbox_note") or ""
     lines = [
         "🌍 <b>OSM WORLD</b>",
@@ -1609,13 +1613,18 @@ def format_osm_place(place: dict[str, Any]) -> str:
         "",
         "Cosa vuoi esplorare?",
     ]
+    for feed in live_feeds or ():
+        lines.append(f"{feed.get('emoji', '')} {e(feed.get('title') or '')}".strip())
     for key in WORLD_CATEGORIES:
         meta = CATEGORIES[key]
         lines.append(f"{meta['emoji']} {e(meta['title'])}")
     if note:
         lines.append("")
         lines.append(f"<i>{e(note)}</i>")
-    lines += ["", "Overpass parte solo quando scegli una categoria.", f"<i>{OSM_NOTE}</i>"]
+    if live_feeds:
+        lines += ["", "Overpass parte solo sulle categorie OSM. ✈️ Aerei LIVE usa OpenSky.", f"<i>{OSM_NOTE}</i>"]
+    else:
+        lines += ["", "Overpass parte solo quando scegli una categoria.", f"<i>{OSM_NOTE}</i>"]
     return clip("\n".join(lines))
 
 
