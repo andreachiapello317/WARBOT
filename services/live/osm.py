@@ -47,9 +47,10 @@ OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 40, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "30"
+QUERY_VER = "31"
 DEDUP_METERS = 180
 HOST_COOLDOWN = 180
+EMPTY_CACHE_TTL = 60
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -619,6 +620,12 @@ def score_stad(row: dict[str, Any], tags: dict[str, Any]) -> int:
         score -= 10
     if any(bit in name for bit in ("juventus", "allianz", "olimpico")):
         score += 6
+    clat, clon = row.get("_clat"), row.get("_clon")
+    if isinstance(clat, (int, float)) and isinstance(clon, (int, float)):
+        dist = ((float(row["lat"]) - float(clat)) ** 2 + (float(row["lon"]) - float(clon)) ** 2) ** 0.5
+        score += max(0, 6 - int(dist * 50))
+        if dist > 0.12:
+            score -= 8
     return score
 
 
@@ -783,15 +790,18 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "kind": "Stadio",
         "primary": (
             clause("rel", eq("leisure", "stadium"), exists("name")),
-            clause("way", eq("leisure", "stadium"), exists("name"), exists("wikidata")),
+            clause("way", eq("leisure", "stadium"), exists("name")),
         ),
-        "fallback": (clause("way", eq("leisure", "stadium"), exists("wikidata"), eq("sport", "soccer")),),
+        "fallback": (
+            clause("way", eq("leisure", "stadium"), exists("name"), eq("sport", "soccer")),
+            clause("node", eq("leisure", "stadium"), exists("name")),
+        ),
         "accept": accept_stadium,
         "score": score_stad,
         "out_limit": 24,
-        "fallback_min": 2,
-        "min_score": 8,
-        "radius_m": 18000,
+        "fallback_min": 1,
+        "min_score": 6,
+        "radius_m": 12000,
     },
     "mall": {
         "id": "mall",
@@ -1113,6 +1123,13 @@ def _overpass_urls() -> list[str]:
     return live or urls or [OVERPASS_URL]
 
 
+def _overpass_failed_remark(payload: dict[str, Any]) -> bool:
+    remark = str(payload.get("remark") or "").lower()
+    if not remark:
+        return False
+    return any(bit in remark for bit in ("timeout", "error", "out of memory"))
+
+
 def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """POST application/x-www-form-urlencoded, parametro data=. Timeout: stop, Riprova manuale."""
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
@@ -1162,6 +1179,13 @@ def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
                     return {"ok": False, "error": "JSON Overpass non valido", "detail": str(exc), "elements": []}
                 if not isinstance(payload, dict):
                     return {"ok": False, "error": "payload Overpass inatteso", "elements": []}
+                remark = str(payload.get("remark") or "")
+                if _overpass_failed_remark(payload):
+                    last_error = "timeout Overpass"
+                    last_detail = remark[:180]
+                    log.warning("overpass remark host=%s", host)
+                    _mark_host(host, ok=False)
+                    break
                 payload["ok"] = True
                 payload.setdefault("elements", [])
                 _mark_host(host, ok=True)
@@ -1557,7 +1581,11 @@ def search(
         "cached": False,
         "around": around,
     }
-    osm_cache.put(_cache_key(box, cat, extra), {k: v for k, v in bundle.items() if k != "cached"}, osm_cache.OVERPASS_TTL)
+    osm_cache.put(
+        _cache_key(box, cat, extra),
+        {k: v for k, v in bundle.items() if k != "cached"},
+        osm_cache.OVERPASS_TTL if rows else EMPTY_CACHE_TTL,
+    )
     log.debug("osm search cat=%s n=%d fallback=%s", cat, len(rows), used_fallback)
     return bundle
 

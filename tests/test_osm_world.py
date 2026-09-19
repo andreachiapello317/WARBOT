@@ -11,6 +11,7 @@ from services.live.osm import (
     accept_aerodrome,
     accept_hospital,
     accept_rail,
+    accept_stadium,
     build_osm_query,
     format_osm_category,
     importance_score,
@@ -76,6 +77,8 @@ class QueryBuilderTest(unittest.TestCase):
         self.assertNotIn("pier", port)
         stad = build_osm_query("stad", BOX, 16, center=CENTER)
         self.assertIn('["leisure"="stadium"]', stad)
+        self.assertIn('way["leisure"="stadium"]["name"]', stad)
+        self.assertNotIn('["wikidata"]', stad)
         mall = build_osm_query("mall", BOX, 16, center=CENTER)
         self.assertIn('["shop"="mall"]', mall)
         self.assertNotIn("supermarket", mall)
@@ -144,6 +147,35 @@ class CuneoLandmarkTest(unittest.TestCase):
         self.assertGreaterEqual(importance_score(museum), 5)
         self.assertGreaterEqual(importance_score(duomo), 5)
         self.assertLess(importance_score(far_hall), 5)
+
+    def test_paschiero_is_a_stadium(self) -> None:
+        tags = {
+            "leisure": "stadium",
+            "sport": "soccer",
+            "name": "Stadio Fratelli Paschiero",
+            "wikidata": "Q3967793",
+        }
+        self.assertTrue(accept_stadium(tags))
+        self.assertFalse(accept_stadium({"leisure": "pitch", "sport": "soccer", "name": "Campo Confreria"}))
+        row = {
+            "name": "Stadio Fratelli Paschiero",
+            "category": "stad",
+            "lat": 44.3831,
+            "lon": 7.5341,
+            "_clat": 44.3896,
+            "_clon": 7.5479,
+            "tags": tags,
+        }
+        self.assertGreaterEqual(importance_score(row), 6)
+
+
+class OverpassRemarkTest(unittest.TestCase):
+    def test_timeout_remark_is_failure(self) -> None:
+        from services.live.osm import _overpass_failed_remark
+
+        self.assertTrue(_overpass_failed_remark({"remark": "runtime error: Query timed out in query"}))
+        self.assertFalse(_overpass_failed_remark({"elements": []}))
+        self.assertFalse(_overpass_failed_remark({"remark": ""}))
 
 
 class RankingDedupTest(unittest.TestCase):
