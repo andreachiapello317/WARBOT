@@ -167,7 +167,8 @@ def compile_query(
     Settings in testa: [out:json][timeout:] — JSON per Telegram, timeout corto.
     Filtri concatenati = AND sulla stessa entità.
     Più clausole = union (OR). minus = difference (A − B).
-    out center N qt: centroide + tag, senza recurse sui membri, ordine quadtile.
+    out center N: centroide + tag, senza recurse sui membri.
+    La geo di default è il bbox (indice spaziale). around resta disponibile, ma è più lento.
     """
     if not clauses:
         raise ValueError("serve almeno una clausola Overpass")
@@ -186,7 +187,7 @@ def compile_query(
     return (
         f"[out:json][timeout:{int(timeout)}];\n"
         f"{body}\n"
-        f"out center {int(limit)} qt;"
+        f"out center {int(limit)};"
     )
 
 

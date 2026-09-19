@@ -26,9 +26,10 @@ class CompileQueryTest(unittest.TestCase):
         self.assertTrue(ql.startswith("[out:json][timeout:12];"))
         self.assertNotIn("{{", ql)
         self.assertNotIn("geocodeArea", ql)
-        self.assertIn("out center 10 qt;", ql)
+        self.assertIn("out center 10;", ql)
         self.assertNotIn(">;", ql)
         self.assertNotIn("out body", ql)
+        self.assertNotIn(" qt;", ql)
 
     def test_and_filters_on_same_object(self) -> None:
         ql = compile_query(

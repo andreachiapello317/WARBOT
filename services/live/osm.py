@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import math
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -31,15 +32,19 @@ log = logging.getLogger("warbot.osm")
 
 TELEGRAM_MAX_LEN = 3900
 
-OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_FALLBACK_URLS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+)
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; Overpass)"
-DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 16, lo=8, hi=25)
-QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 12, lo=6, hi=20)
+DEFAULT_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_TIMEOUT", 10, lo=6, hi=20)
+QUERY_TIMEOUT = osm_cache.int_env("OSM_OVERPASS_QL_TIMEOUT", 15, lo=8, hi=25)
 OVERPASS_RETRIES = osm_cache.int_env("OSM_OVERPASS_RETRIES", 1, lo=1, hi=3)
 OUT_LIMIT = osm_cache.int_env("OSM_OVERPASS_LIMIT", 80, lo=20, hi=120)
 RESULT_LIMIT = PAGE_SIZE
 LIST_LIMIT = PAGE_SIZE
-QUERY_VER = "20"
+QUERY_VER = "21"
 OSM_NOTE = "OpenStreetMap via Overpass. Copertura volontaria, non un elenco ufficiale."
 
 BBox = tuple[float, float, float, float]
@@ -124,16 +129,7 @@ def accept_rail(tags: dict[str, Any]) -> bool:
         return False
     if str(tags.get("usage") or "").lower() in {"industrial", "military", "freight"}:
         return False
-    try:
-        plats = int(str(_tag(tags, "platforms") or "0").split(";")[0])
-    except ValueError:
-        plats = 0
-    if any(hint in name for hint, _pts in _MAJOR_RAIL):
-        return True
-    if plats >= 6:
-        return True
-    hub = plats >= 4 or tags.get("building") == "train_station"
-    return bool(_tag(tags, "wikipedia")) and hub
+    return True
 
 
 def accept_named(tags: dict[str, Any]) -> bool:
@@ -534,8 +530,7 @@ def importance_score(row: dict[str, Any]) -> int:
 
 
 # Query per categoria: AND = filtri concatenati; OR = union di Clause; NOT = != / regex.
-# Il tipo OSM è scelto a proposito (node stazione, way mall, rel/way stadio).
-# radius_m → filtro around sul punto geocodificato. fallback solo se i candidati sono pochi.
+# radius_m → bbox sul punto geocodificato (indice spaziale, più veloce di around).
 CATEGORIES: dict[str, dict[str, Any]] = {
     "aero": {
         "id": "aero",
@@ -556,10 +551,9 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "title": "Stazioni principali",
         "primary": (
             clause(
-                "node",
+                "nw",
                 eq("railway", "station"),
                 eq("train", "yes"),
-                exists("wikidata"),
                 neq("station", "subway"),
                 neq("station", "tram"),
                 neq("station", "light_rail"),
@@ -567,22 +561,19 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         ),
         "fallback": (
             clause(
-                "node",
+                "nw",
                 eq("railway", "station"),
-                eq("train", "yes"),
-                regex(
-                    "name",
-                    "Centrale|Termini|Lingotto|Porta Nuova|Porta Susa|Porta Garibaldi|Cadorna|Lambrate|Rogoredo|Hauptbahnhof|Shinjuku|Shibuya",
-                    ignore_case=True,
-                ),
+                exists("name"),
+                neq("station", "subway"),
+                neq("station", "tram"),
             ),
         ),
         "accept": accept_rail,
         "score": score_rail,
-        "out_limit": 40,
-        "fallback_min": 3,
-        "min_score": 16,
-        "radius_m": 11000,
+        "out_limit": 20,
+        "fallback_min": 1,
+        "min_score": 8,
+        "radius_m": 20000,
     },
     "hosp": {
         "id": "hosp",
@@ -619,9 +610,9 @@ CATEGORIES: dict[str, dict[str, Any]] = {
         "accept": accept_stadium,
         "score": score_stad,
         "out_limit": 8,
-        "fallback_min": 1,
-        "min_score": 10,
-        "radius_m": 15000,
+        "fallback_min": 2,
+        "min_score": 8,
+        "radius_m": 18000,
     },
     "mall": {
         "id": "mall",
@@ -774,48 +765,58 @@ def peek(bbox: BBox | str, category: str, *, center: tuple[float, float] | list[
     return None
 
 
+def _overpass_urls() -> list[str]:
+    custom = (os.getenv("OSM_OVERPASS_URL") or "").strip()
+    urls: list[str] = []
+    for url in (custom, *OVERPASS_FALLBACK_URLS):
+        if url and url not in urls:
+            urls.append(url)
+    return urls or [OVERPASS_URL]
+
+
 def overpass(query: str, *, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """POST application/x-www-form-urlencoded, parametro data=."""
+    """POST application/x-www-form-urlencoded, parametro data=. Prova più interpreter se uno 504/timeout."""
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
     last_error = "Overpass non ha risposto"
     last_detail = ""
-    for attempt in range(OVERPASS_RETRIES):
-        req = urllib.request.Request(
-            OVERPASS_URL,
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": USER_AGENT,
-                "Accept": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-        except TimeoutError as exc:
-            last_error = f"timeout Overpass ({timeout}s)"
-            last_detail = str(exc)
-        except urllib.error.HTTPError as exc:
-            last_error = f"HTTP {exc.code}"
-            last_detail = str(exc)
-            if exc.code not in {429, 502, 503, 504}:
-                return {"ok": False, "error": last_error, "detail": last_detail, "elements": []}
-        except urllib.error.URLError as exc:
-            last_error = "Overpass non raggiungibile"
-            last_detail = str(exc.reason or exc)
-        else:
+    for url in _overpass_urls():
+        for attempt in range(OVERPASS_RETRIES):
+            req = urllib.request.Request(
+                url,
+                data=body,
+                method="POST",
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": USER_AGENT,
+                    "Accept": "application/json",
+                },
+            )
             try:
-                payload = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                return {"ok": False, "error": "JSON Overpass non valido", "detail": str(exc), "elements": []}
-            if not isinstance(payload, dict):
-                return {"ok": False, "error": "payload Overpass inatteso", "elements": []}
-            payload["ok"] = True
-            payload.setdefault("elements", [])
-            return payload
-        if attempt < OVERPASS_RETRIES - 1:
-            time.sleep(0.6 * (attempt + 1))
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read()
+            except TimeoutError as exc:
+                last_error = f"timeout Overpass ({timeout}s)"
+                last_detail = str(exc)
+            except urllib.error.HTTPError as exc:
+                last_error = f"HTTP {exc.code}"
+                last_detail = str(exc)
+                if exc.code not in {429, 502, 503, 504}:
+                    break
+            except urllib.error.URLError as exc:
+                last_error = "Overpass non raggiungibile"
+                last_detail = str(exc.reason or exc)
+            else:
+                try:
+                    payload = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    return {"ok": False, "error": "JSON Overpass non valido", "detail": str(exc), "elements": []}
+                if not isinstance(payload, dict):
+                    return {"ok": False, "error": "payload Overpass inatteso", "elements": []}
+                payload["ok"] = True
+                payload.setdefault("elements", [])
+                return payload
+            if attempt < OVERPASS_RETRIES - 1:
+                time.sleep(0.4 * (attempt + 1))
     return {"ok": False, "error": last_error, "detail": last_detail, "elements": []}
 
 
@@ -916,14 +917,11 @@ def build_query(
     clauses = as_clauses(raw)
     if not clauses:
         raise ValueError(f"nessuna clausola Overpass per {cat}")
-    radius = int(meta.get("radius_m") or 0)
-    around = (here[0], here[1], radius) if here is not None and radius > 0 else None
     return compile_query(
-        None if around else box,
+        box,
         clauses,
         timeout=timeout if timeout is not None else QUERY_TIMEOUT,
         limit=limit if limit is not None else int(meta.get("out_limit") or OUT_LIMIT),
-        around=around,
     )
 
 

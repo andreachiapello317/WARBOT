@@ -8,14 +8,14 @@ Non scarica una città intera: il geocoder trova il luogo, Overpass parte **solo
 
 1. Scrivi Tokyo, Parigi, Milano… — solo geocoding, nessuna query Overpass
 2. 📍 Località e menu categorie, subito
-3. Tocca una categoria: il query engine genera Overpass QL (filtri AND, tipo node/way/rel, `around` sul punto)
+3. Tocca una categoria: il query engine genera Overpass QL (filtri AND, tipo node/way/rel, bbox sul punto)
 4. Primary query → se troppi pochi candidati, **una** fallback più larga
 5. Deduplica (Wikidata / nome+posizione) + ranking di categoria → **10** risultati
 6. Cache geocoding e categoria+luogo; timeout Overpass con Riprova, senza martellare
 
 Overpass Turbo **non** è l'endpoint: è solo il modello mentale (Wizard AND/OR, corso «oltre il wizard»). Runtime: `https://maps.mail.ru/osm/tools/overpass/api/interpreter`. Niente scorciatoie `{{bbox}}` / `{{geocodeArea}}`.
 
-Le **stazioni principali** chiedono `train=yes` + Wikidata, escludono subway/tram in query (`station!=`) e le code suburbane in ranking. `out center N qt` restituisce centroide e tag, senza recurse sui membri.
+Le **stazioni principali** chiedono `train=yes`, escludono subway/tram in query (`station!=`) e le code suburbane in ranking. `out center N` restituisce centroide e tag, senza recurse sui membri. Se l'interpreter è lento o in 504, se ne prova un secondo.
 
 ## Avvio locale
 
