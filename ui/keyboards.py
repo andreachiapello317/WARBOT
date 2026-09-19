@@ -38,7 +38,39 @@ def live_hub_keyboard() -> InlineKeyboardMarkup:
             [kb_btn("🔄 Aggiorna posizioni", "home:live")],
             [kb_btn("✈️ Aerei Italia", "live:ac:it"), kb_btn("🌊 Mediterraneo", "live:ac:med")],
             [kb_btn("🚁 Elicotteri", "live:heli:it"), kb_btn("⚓ Navi Baltico", "live:ships")],
-            [kb_btn("🛰️ Mappa ISS", "live:iss"), kb_btn("❓ Aiuto", "home:aiuto")],
+            [kb_btn("🛰️ Mappa ISS", "live:iss"), kb_btn("🗺️ OSM Milano", "live:osm:milano")],
+            [kb_btn("❓ Aiuto", "home:aiuto")],
+        ]
+    )
+
+
+def osm_place_keyboard(place: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [kb_btn("🔄 Aggiorna", f"live:osm:{place}")],
+            [
+                kb_btn("✈️ Aeroporti", f"live:osm:{place}:aerodrome"),
+                kb_btn("🚉 Stazioni", f"live:osm:{place}:station"),
+            ],
+            [kb_btn("🏥 Ospedali", f"live:osm:{place}:hospital")],
+            [kb_btn("📡 Posizioni live", "home:live")],
+            nav_row(),
+        ]
+    )
+
+
+def osm_category_keyboard(place: str, category: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [kb_btn("🔄 Aggiorna", f"live:osm:{place}:{category}")],
+            [
+                kb_btn("✈️ Aeroporti", f"live:osm:{place}:aerodrome"),
+                kb_btn("🚉 Stazioni", f"live:osm:{place}:station"),
+            ],
+            [kb_btn("🏥 Ospedali", f"live:osm:{place}:hospital")],
+            [kb_btn("🗺️ Riepilogo OSM", f"live:osm:{place}")],
+            [kb_btn("📡 Posizioni live", "home:live")],
+            nav_row(),
         ]
     )
 

@@ -9,6 +9,7 @@ def help_text() -> str:
         "Posizioni vere, adesso. Feed pubblici: niente radar militare.\n\n"
         "/start — hub: ISS, aerei sull'Italia, navi del Baltico\n"
         "/live — stesso hub, aggiornato\n"
+        "/live milano — OSM: aeroporti, stazioni, ospedali (Overpass)\n"
         "/aerei — ADS-B su una zona (it, med, eu, uk, us, jp)\n"
         "/elicotteri — stesso ADS-B, solo eli\n"
         "/navi — AIS aperto del Baltico finlandese\n"

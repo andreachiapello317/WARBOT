@@ -39,11 +39,21 @@ from services.live import (
     format_live_hub,
     format_ships,
 )
+from services.live.osm import (
+    PLACES,
+    format_osm_category,
+    format_osm_place,
+    resolve_category,
+    resolve_place,
+    search_place,
+)
 from ui.keyboards import (
     back_home_keyboard,
     live_hub_keyboard,
     live_misc_keyboard,
     live_region_keyboard,
+    osm_category_keyboard,
+    osm_place_keyboard,
 )
 from ui.texts import help_text
 
@@ -316,6 +326,10 @@ async def open_live(update: Update, context: ContextTypes.DEFAULT_TYPE, action: 
     if action == "iss":
         await show_live_iss(update, context)
         return
+    if action == "osm":
+        place, _, cat = extra.partition(":")
+        await show_osm(update, context, place or "milano", cat or None)
+        return
     await show_live_hub(update, context)
 
 
@@ -350,7 +364,71 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await delete_user_command(update)
 
 
+async def show_osm(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    place: str,
+    category: str | None = None,
+) -> None:
+    meta = resolve_place(place)
+    if meta is None:
+        known = ", ".join(sorted(PLACES))
+        await reply_html(
+            update,
+            context,
+            f"🗺️ <b>LIVE OSM</b>\n\nLuogo non in mappa. Ora: {known}.\nEsempio: /live milano",
+            reply_markup=back_home_keyboard(),
+        )
+        return
+    place_id = meta["id"]
+    cat = resolve_category(category) if category else None
+    if category and not cat:
+        await show_osm(update, context, place_id, None)
+        return
+    if cat:
+        await reply_html(
+            update,
+            context,
+            f"🗺️ <b>LIVE OSM</b>\n\nInterrogo OpenStreetMap su {meta['title']}…",
+            reply_markup=osm_category_keyboard(place_id, cat),
+        )
+        bundle = await asyncio.to_thread(search_place, place_id, cat)
+        await reply_html(
+            update,
+            context,
+            format_osm_category(bundle),
+            reply_markup=osm_category_keyboard(place_id, cat),
+            preview=True,
+        )
+        return
+    await reply_html(
+        update,
+        context,
+        f"🗺️ <b>LIVE OSM</b>\n\nInterrogo OpenStreetMap su {meta['title']}…",
+        reply_markup=osm_place_keyboard(place_id),
+    )
+    bundle = await asyncio.to_thread(search_place, place_id)
+    await reply_html(
+        update,
+        context,
+        format_osm_place(bundle),
+        reply_markup=osm_place_keyboard(place_id),
+        preview=True,
+    )
+
+
 async def cmd_live(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    if args:
+        place = args[0]
+        category = args[1] if len(args) > 1 else None
+        token = f"live:osm:{resolve_place(place)['id']}" if resolve_place(place) else f"live:osm:{place.lower()}"
+        if category and resolve_category(category):
+            token = f"{token}:{resolve_category(category)}"
+        _cmd_begin(context, token)
+        await show_osm(update, context, place, category)
+        await delete_user_command(update)
+        return
     _cmd_begin(context, "home:live")
     await show_live_hub(update, context)
     await delete_user_command(update)
@@ -432,7 +510,7 @@ async def post_init(application: Application) -> None:
         await application.bot.set_my_commands(
             [
                 BotCommand("start", "Posizioni live: aerei, navi, ISS"),
-                BotCommand("live", "Hub: ISS, aerei Italia, navi Baltico"),
+                BotCommand("live", "Hub live, o /live milano per OSM"),
                 BotCommand("aerei", "Aerei in volo su una zona"),
                 BotCommand("elicotteri", "Solo elicotteri, stessa zona"),
                 BotCommand("navi", "Navi AIS del Baltico"),

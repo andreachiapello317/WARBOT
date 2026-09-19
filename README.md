@@ -12,6 +12,7 @@ Non è un radar militare e non serve a inseguire bersagli. I dati sono quelli ch
 | 🚁 Elicotteri | stesso ADS-B, categoria eli | Stesse zone |
 | ⚓ Navi | AIS aperto [Digitraffic](https://www.digitraffic.fi) (Finlandia) | Mar Baltico / acque finlandesi — un mare vero, non un AIS mondiale |
 | 🛰️ ISS | [wheretheiss.at](https://wheretheiss.at) | Lat/lon, quota, velocità, luce o ombra |
+| 🗺️ OSM | Overpass ([maps.mail.ru](https://maps.mail.ru/osm/tools/overpass/api/interpreter)) | Aeroporti, stazioni, ospedali in un bounding box. Primo luogo: `/live milano` |
 
 Nel web: `/` e `/live` (hub con mappa), `/live/ac`, `/live/heli`, `/live/navi`, `/live/iss`, `/live.json`.
 
@@ -46,7 +47,7 @@ Non avviare il polling in locale se il bot è già in webhook su Render: Telegra
 
 ```
 start - Hub live: ISS, aerei, navi
-live - Aggiorna il quadro
+live - Hub live, o /live milano per OSM
 aerei - ADS-B su una zona (it, med, eu, uk, us, jp)
 elicotteri - Solo elicotteri
 navi - AIS aperto del Baltico
@@ -57,11 +58,12 @@ aiuto - Elenco comandi
 ## Architettura
 
 ```
-bot.py              Telegram: nav, un solo messaggio, webhook/polling
-museum.py           Mappa web sugli stessi feed (porta 47261)
-ui/keyboards.py     Tastiere inline
-ui/texts.py         Testi di interfaccia
-services/live.py    ADS-B, AIS, ISS
+bot.py                 Telegram: nav, un solo messaggio, webhook/polling
+museum.py              Mappa web sugli stessi feed (porta 47261)
+ui/keyboards.py        Tastiere inline
+ui/texts.py            Testi di interfaccia
+services/live/feeds.py ADS-B, AIS, ISS
+services/live/osm.py   OpenStreetMap via Overpass
 ```
 
-Callback: `home:live`, `live:ac:it`, `live:heli:med`, `live:ships`, `live:iss`, `nav:back`, `home:menu`.
+Callback: `home:live`, `live:ac:it`, `live:heli:med`, `live:ships`, `live:iss`, `live:osm:milano`, `live:osm:milano:aerodrome`, `nav:back`, `home:menu`.
