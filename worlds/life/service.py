@@ -348,7 +348,7 @@ def _format_safety(bundle: dict, name: str, now, offset: int, limit: int) -> str
         lines.append("⚠️ Allerte Meteoalarm non disponibili in questo momento.")
         lines.append("")
     elif not alerts:
-        lines.append("✅ Nessuna allerta Meteoalarm attiva per la zona (o solo «nessuna allerta»).")
+        lines.append("✅ Nessuna allerta gialla/arancione Meteoalarm per la zona.")
         lines.append("")
     else:
         lines.append("🚨 <b>Allerte</b> (Meteoalarm / Protezione civile nazionale)")

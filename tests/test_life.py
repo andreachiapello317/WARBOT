@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from core.geo import azimuth_deg, cardinal_it
 from core.session import get_previous_city, set_city
+from worlds.life.alerts import filter_for_city
 from worlds.life.hours import is_open_now
 from worlds.life.queries import get_query
 from worlds.life.service import format_life, run_compare
@@ -68,6 +69,19 @@ class FakeUpdate:
         self.effective_chat = SimpleNamespace(id=1)
         self.effective_message = SimpleNamespace(message_id=9, text="x")
         self.callback_query = None
+
+
+class AlertsFilterTest(unittest.TestCase):
+    def test_skips_green_when_matching_region(self) -> None:
+        rows = [
+            {"event": "Verde Pioggia", "severity": "Minor", "areas": ["Lombardia"]},
+            {"event": "Giallo Temporali", "severity": "Moderate", "areas": ["Lombardia"]},
+            {"event": "Yellow Thunderstorm Warning", "severity": "Moderate", "areas": ["Lombardia"]},
+        ]
+        out = filter_for_city(rows, MILANO)
+        events = [r["event"] for r in out]
+        self.assertIn("Giallo Temporali", events)
+        self.assertNotIn("Verde Pioggia", events)
 
 
 class HoursTest(unittest.TestCase):

@@ -195,16 +195,31 @@ def fetch_meteoalarm(country_code: str) -> dict[str, Any]:
 def filter_for_city(rows: list[dict[str, Any]], city: dict[str, Any]) -> list[dict[str, Any]]:
     state = _norm(str(city.get("state") or city.get("region") or ""))
     mun = _norm(str(city.get("municipality") or city.get("name") or ""))
-    if not state and not mun:
-        return [r for r in rows if str(r.get("severity") or "").lower() in {"moderate", "severe", "extreme"}][:12]
-    matched: list[dict[str, Any]] = []
-    for row in rows:
-        blob = _norm(" ".join(row.get("areas") or []))
-        if state and state in blob:
-            matched.append(row)
+    pool = rows
+    if state or mun:
+        matched: list[dict[str, Any]] = []
+        for row in rows:
+            blob = _norm(" ".join(row.get("areas") or []))
+            if state and state in blob:
+                matched.append(row)
+                continue
+            if mun and mun in blob:
+                matched.append(row)
+        pool = matched or [
+            r for r in rows if str(r.get("severity") or "").lower() in {"severe", "extreme", "moderate"}
+        ][:8]
+    serious = [
+        r
+        for r in pool
+        if str(r.get("severity") or "").lower() in {"moderate", "severe", "extreme"}
+    ]
+    chosen = serious or []
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in chosen:
+        key = f"{_norm(str(row.get('event') or ''))}|{','.join(row.get('areas') or [])}"
+        if key in seen:
             continue
-        if mun and mun in blob:
-            matched.append(row)
-    if matched:
-        return matched
-    return [r for r in rows if str(r.get("severity") or "").lower() in {"severe", "extreme", "moderate"}][:8]
+        seen.add(key)
+        out.append(row)
+    return out[:12]
