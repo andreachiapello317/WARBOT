@@ -117,6 +117,9 @@ class PhotonGeocoder:
                         "osm_key": str(props.get("osm_key") or ""),
                         "osm_value": str(props.get("osm_value") or ""),
                         "place_type": str(props.get("type") or ""),
+                        "country_code": str(props.get("countrycode") or "").lower(),
+                        "state": str(props.get("state") or ""),
+                        "municipality": str(props.get("city") or props.get("locality") or ""),
                     },
                 )
             )
@@ -173,6 +176,9 @@ class NominatimGeocoder:
                     extra={
                         "display_raw": str(row.get("display_name") or ""),
                         "osm_value": str(row.get("addresstype") or row.get("type") or ""),
+                        "country_code": str(addr.get("country_code") or "").lower(),
+                        "state": str(addr.get("state") or addr.get("region") or ""),
+                        "municipality": str(addr.get("city") or addr.get("town") or addr.get("village") or ""),
                     },
                 )
             )

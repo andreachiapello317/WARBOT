@@ -80,10 +80,13 @@ def _hit(place: dict) -> dict:
 class RegistryTest(unittest.TestCase):
     def test_two_worlds_no_invented_third(self) -> None:
         ids = [item["id"] for item in WORLD_META]
-        self.assertEqual(ids, ["osm", "airtraffic"])
+        self.assertEqual(ids, ["osm", "airtraffic", "sky", "earth", "space"])
         items = world_menu_items()
         self.assertEqual(items[0]["callback"], "world:osm")
         self.assertEqual(items[1]["callback"], "world:airtraffic")
+        self.assertEqual(items[2]["callback"], "world:sky")
+        self.assertEqual(items[3]["callback"], "world:earth")
+        self.assertEqual(items[4]["callback"], "world:space")
 
     def test_parse_callback_hierarchy(self) -> None:
         self.assertEqual(parse_callback("world:osm"), ("world", ["osm"]))
@@ -124,6 +127,9 @@ class CityContextTest(unittest.TestCase):
         self.assertIn("Milano", text)
         self.assertIn("OSM WORLD", text)
         self.assertIn("AIR TRAFFIC", text)
+        self.assertIn("SKY", text)
+        self.assertIn("EARTH", text)
+        self.assertIn("SPACE", text)
         self.assertNotIn("OPEN SKY", text)
         self.assertNotIn("Stazioni", text)
         self.assertNotIn("Aeroporti", text)
@@ -190,6 +196,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Scegli un mondo", menu)
             self.assertIn("OSM WORLD", menu)
             self.assertIn("AIR TRAFFIC", menu)
+            self.assertIn("SKY", menu)
             self.assertNotIn("Stazioni ferroviarie", menu)
 
             await osm_menu(self.update, self.ctx)  # type: ignore[arg-type]
@@ -334,6 +341,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         with patch("worlds.city.geocode") as geo:
             await dispatch(self.update, self.ctx, "world:osm")  # type: ignore[arg-type]
             await dispatch(self.update, self.ctx, "world:airtraffic")  # type: ignore[arg-type]
+            await dispatch(self.update, self.ctx, "world:sky")  # type: ignore[arg-type]
             await dispatch(self.update, self.ctx, "world:list")  # type: ignore[arg-type]
             geo.assert_not_called()
             self.assertEqual(get_city(self.ctx)["name"], "Milano")  # type: ignore[index]

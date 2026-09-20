@@ -50,14 +50,12 @@ async def show_query(update: Update, context: ContextTypes.DEFAULT_TYPE, query_i
     if not meta:
         await show_menu(update, context)
         return
-    log.info("[AIRTRAFFIC] provider=adsb.lol")
     log.info(
         "[AIRTRAFFIC] city=%s lat=%s lon=%s",
         city_label(city),
         city.get("lat"),
         city.get("lon"),
     )
-    await deliver(update, context, wait_text(city), reply_markup=menu_keyboard())
     bundle = await asyncio.to_thread(run_aircraft, city, meta["id"])
     state = airtraffic_state(context)
     state["bundle"] = bundle

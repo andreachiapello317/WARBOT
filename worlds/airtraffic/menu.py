@@ -31,7 +31,7 @@ def menu_text(city: dict) -> str:
     for item in QUERIES:
         lines.append(f"{item['emoji']} {item['title']}")
     lines.append("")
-    lines.append("<i>ADSB.lol · aerei LIVE. Nessun Overpass.</i>")
+    lines.append("<i>Airplanes.live · fallback ADSB.lol. Nessun Overpass.</i>")
     return "\n".join(lines)
 
 

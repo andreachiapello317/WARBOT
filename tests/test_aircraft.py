@@ -293,7 +293,7 @@ class ClientMockTest(unittest.TestCase):
         return json.dumps({"ac": rows, "now": 1_700_000_000_000, "total": len(rows), "msg": "ok", "ctime": 1, "ptime": 1}).encode()
 
     def test_http_429(self) -> None:
-        with patch("services.live.adsb_client.http_request", return_value=(429, b"", {"retry-after": "30"})):
+        with patch("core.http.http_get", return_value=(429, b"", {"retry-after": "30"})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "rate")
@@ -310,8 +310,8 @@ class ClientMockTest(unittest.TestCase):
             return 200, payload, {}
 
         with (
-            patch("services.live.adsb_client.time.sleep") as sleep,
-            patch("services.live.adsb_client.http_request", side_effect=fake_http),
+            patch("core.http.time.sleep") as sleep,
+            patch("core.http.http_get", side_effect=fake_http),
         ):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertTrue(bundle["ok"])
@@ -319,25 +319,25 @@ class ClientMockTest(unittest.TestCase):
         sleep.assert_called()
 
     def test_timeout(self) -> None:
-        with patch("services.live.adsb_client.http_request", return_value=(0, b"", {})):
+        with patch("core.http.http_get", return_value=(0, b"", {})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "timeout")
 
     def test_http_5xx(self) -> None:
-        with patch("services.live.adsb_client.http_request", return_value=(503, b"", {})):
+        with patch("core.http.http_get", return_value=(503, b"", {})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "unavailable")
 
     def test_bad_json(self) -> None:
-        with patch("services.live.adsb_client.http_request", return_value=(200, b"not-json", {})):
+        with patch("core.http.http_get", return_value=(200, b"not-json", {})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertFalse(bundle["ok"])
         self.assertEqual(bundle["code"], "bad_json")
 
     def test_empty_list(self) -> None:
-        with patch("services.live.adsb_client.http_request", return_value=(200, self._payload([]), {})):
+        with patch("core.http.http_get", return_value=(200, self._payload([]), {})):
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertTrue(bundle["ok"])
         self.assertEqual(bundle["aircraft"], [])
@@ -345,24 +345,37 @@ class ClientMockTest(unittest.TestCase):
 
     def test_success_normalizes(self) -> None:
         payload = self._payload([_ac("4ca123", 45.47, 9.20)])
-        with patch("services.live.adsb_client.http_request", return_value=(200, payload, {})) as http:
+        with patch("core.http.http_get", return_value=(200, payload, {})) as http:
             bundle = get_aircraft_nearby(*MILANO, force=True)
         self.assertTrue(bundle["ok"])
         self.assertEqual(bundle["aircraft"][0]["callsign"], "AZA123")
         url = http.call_args[0][0]
-        self.assertIn("/v2/lat/", url)
-        self.assertIn("/dist/27", url)
+        self.assertIn("/v2/point/", url)
+        self.assertEqual(bundle.get("provider"), "airplanes.live")
+
+    def test_fallback_adsb_on_403(self) -> None:
+        payload = self._payload([_ac("4ca123", 45.47, 9.20)])
+
+        def fake(url: str, **_kwargs):
+            if "airplanes.live" in url:
+                return 403, b'{"error":"contact"}', {}
+            return 200, payload, {}
+
+        with patch("core.http.http_get", side_effect=fake):
+            bundle = get_aircraft_nearby(*MILANO, force=True)
+        self.assertTrue(bundle["ok"])
+        self.assertEqual(bundle.get("provider"), "adsb.lol")
 
     def test_cache_avoids_second_http(self) -> None:
         payload = self._payload([_ac("4ca123", 45.47, 9.20)])
-        with patch("services.live.adsb_client.http_request", return_value=(200, payload, {})) as http:
+        with patch("core.http.http_get", return_value=(200, payload, {})) as http:
             a = get_aircraft_nearby(*MILANO, force=True)
             b = get_aircraft_nearby(*MILANO, force=False)
         self.assertTrue(a["ok"] and b["ok"])
         self.assertEqual(http.call_count, 1)
 
     def test_no_credentials_in_request(self) -> None:
-        with patch("services.live.adsb_client.http_request", return_value=(200, self._payload([]), {})) as http:
+        with patch("core.http.http_get", return_value=(200, self._payload([]), {})) as http:
             get_aircraft_nearby(*MILANO, force=True)
         self.assertNotIn("Authorization", str(http.call_args))
         self.assertNotIn("api_key", str(http.call_args).lower())

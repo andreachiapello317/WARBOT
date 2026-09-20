@@ -15,8 +15,6 @@ from telegram.ext import ContextTypes
 HandleFn = Callable[[Update, ContextTypes.DEFAULT_TYPE, list[str]], Awaitable[None]]
 MenuFn = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 
-# Terzo mondo: nel repo non esiste un terzo mondo Telegram già implementato.
-# Non se ne inventa uno. Solo OSM + AIR TRAFFIC.
 WORLD_META: tuple[dict[str, str], ...] = (
     {
         "id": "osm",
@@ -28,7 +26,25 @@ WORLD_META: tuple[dict[str, str], ...] = (
         "id": "airtraffic",
         "title": "AIR TRAFFIC",
         "icon": "✈️",
-        "description": "Aerei LIVE via ADSB.lol",
+        "description": "Aerei LIVE intorno alla città",
+    },
+    {
+        "id": "sky",
+        "title": "SKY",
+        "icon": "🌤️",
+        "description": "Meteo, aria, mare, sole",
+    },
+    {
+        "id": "earth",
+        "title": "EARTH",
+        "icon": "🌋",
+        "description": "Terremoti, incendi, eventi, fiumi",
+    },
+    {
+        "id": "space",
+        "title": "SPACE",
+        "icon": "🛰️",
+        "description": "ISS, Starlink, satelliti visibili",
     },
 )
 
@@ -51,12 +67,21 @@ def _ensure() -> None:
         return
     from worlds.airtraffic.handler import handle as air_handle
     from worlds.airtraffic.handler import show_menu as air_menu
+    from worlds.earth.handler import handle as earth_handle
+    from worlds.earth.handler import show_menu as earth_menu
     from worlds.osm.handler import handle as osm_handle
     from worlds.osm.handler import show_menu as osm_menu
+    from worlds.sky.handler import handle as sky_handle
+    from worlds.sky.handler import show_menu as sky_menu
+    from worlds.space.handler import handle as space_handle
+    from worlds.space.handler import show_menu as space_menu
 
     handlers = {
         "osm": (osm_handle, osm_menu),
         "airtraffic": (air_handle, air_menu),
+        "sky": (sky_handle, sky_menu),
+        "earth": (earth_handle, earth_menu),
+        "space": (space_handle, space_menu),
     }
     for meta in WORLD_META:
         handle, menu = handlers[meta["id"]]
@@ -77,6 +102,10 @@ def get_world(world_id: str | None) -> World | None:
     return _loaded.get(world_id.strip().lower())
 
 
+def world_ids() -> tuple[str, ...]:
+    return tuple(item["id"] for item in WORLD_META)
+
+
 def world_menu_items() -> list[dict[str, Any]]:
     return [
         {
@@ -95,6 +124,11 @@ def parse_callback(data: str) -> tuple[str, list[str]]:
     if not bits:
         return "", []
     return bits[0], bits[1:]
+
+
+def callback_pattern() -> str:
+    prefixes = "|".join(("city", "world", "nav", "home", "live") + world_ids())
+    return rf"^({prefixes}):"
 
 
 WORLDS = WORLD_META

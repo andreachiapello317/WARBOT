@@ -3,7 +3,7 @@
 WARBOT — città, poi mondi, poi query.
 
 START chiede la località. Il geocoding crea il CityContext.
-Ogni mondo (OSM, AIR TRAFFIC) usa quelle coordinate. Nessun secondo geocoding
+Ogni mondo (OSM, AIR TRAFFIC, SKY, EARTH, SPACE) usa quelle coordinate. Nessun secondo geocoding
 quando si passa da un mondo all'altro.
 
 Webhook / token / Render: invariati.
@@ -29,10 +29,7 @@ from telegram.ext import (
 
 from core.webhook import install_health_routes, resolve_webhook
 from core.session import (
-    SCREEN_AIRTRAFFIC_MENU,
-    SCREEN_AIRTRAFFIC_RESULTS,
     SCREEN_OSM_ITEM,
-    SCREEN_OSM_MENU,
     SCREEN_OSM_NEAR,
     SCREEN_OSM_RESULTS,
     SCREEN_WORLDS,
@@ -51,7 +48,7 @@ from worlds.city import (
     show_city_prompt,
     show_worlds,
 )
-from worlds.registry import get_world, parse_callback
+from worlds.registry import callback_pattern, get_world, parse_callback, world_ids
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -73,12 +70,13 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if world:
             await world.show_menu(update, context)
             return
-    if screen in {SCREEN_AIRTRAFFIC_RESULTS}:
-        world = get_world("airtraffic")
+    if screen.endswith("_results"):
+        prefix = screen[: -len("_results")]
+        world = get_world(prefix) or (get_world(world_id) if world_id else None)
         if world:
             await world.show_menu(update, context)
             return
-    if screen in {SCREEN_OSM_MENU, SCREEN_AIRTRAFFIC_MENU} or world_id:
+    if screen.endswith("_menu") or world_id:
         await show_worlds(update, context)
         return
     if screen == SCREEN_WORLDS and get_city(context):
@@ -116,7 +114,7 @@ async def dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str
             return
         await open_world(update, context, parts[0])
         return
-    if prefix in {"osm", "airtraffic"}:
+    if prefix in {"osm", *world_ids()}:
         world = get_world(prefix)
         if world:
             await world.handle(update, context, parts)
@@ -161,15 +159,31 @@ async def cmd_osm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await delete_user_command(update)
 
 
-async def cmd_airtraffic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_world(update: Update, context: ContextTypes.DEFAULT_TYPE, world_id: str) -> None:
     args = [a.strip() for a in (context.args or []) if a.strip()]
     if args:
         await lookup_city(update, context, " ".join(args))
     if get_city(context) and not waiting_city(context):
-        await open_world(update, context, "airtraffic")
+        await open_world(update, context, world_id)
     else:
         await show_city_prompt(update, context)
     await delete_user_command(update)
+
+
+async def cmd_airtraffic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await cmd_world(update, context, "airtraffic")
+
+
+async def cmd_sky(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await cmd_world(update, context, "sky")
+
+
+async def cmd_earth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await cmd_world(update, context, "earth")
+
+
+async def cmd_space(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await cmd_world(update, context, "space")
 
 
 async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -222,6 +236,9 @@ async def post_init(application: Application) -> None:
                 BotCommand("start", "Inserisci una città"),
                 BotCommand("osm", "OSM WORLD"),
                 BotCommand("airtraffic", "AIR TRAFFIC"),
+                BotCommand("sky", "SKY"),
+                BotCommand("earth", "EARTH"),
+                BotCommand("space", "SPACE"),
                 BotCommand("aiuto", "Come funziona"),
             ]
         )
@@ -236,7 +253,10 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler(["aiuto", "help"], cmd_aiuto))
     application.add_handler(CommandHandler(["osm", "live", "overpass"], cmd_osm))
     application.add_handler(CommandHandler(["airtraffic", "aerei"], cmd_airtraffic))
-    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^(city|world|osm|airtraffic|nav|home|live):"))
+    application.add_handler(CommandHandler("sky", cmd_sky))
+    application.add_handler(CommandHandler("earth", cmd_earth))
+    application.add_handler(CommandHandler("space", cmd_space))
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=callback_pattern()))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_plain_text))
     application.add_handler(MessageHandler(filters.COMMAND, on_unknown_command))
     application.add_error_handler(on_error)

@@ -19,14 +19,12 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from services.live.adsb_client import get_nearby
+from core.geo import EARTH_RADIUS_KM, KM_PER_DEG_LAT, KT_TO_KMH, haversine_km, km_to_nm
+from services.live.adsb_client import fetch_nearby
 from services.live.osm import LIST_LIMIT, clip, e
 
 log = logging.getLogger("warbot.airtraffic")
 
-EARTH_RADIUS_KM = 6371.0
-KM_PER_DEG_LAT = 111.32
-KT_TO_KMH = 1.852
 FT_TO_M = 0.3048
 FTMIN_TO_MS = 0.00508
 CACHE_TTL_DEFAULT = 8
@@ -89,12 +87,6 @@ class Aircraft:
         return asdict(self)
 
 
-def km_to_nm(radius_km: float) -> int:
-    """ADSB.lol vuole il raggio in miglia nautiche intere (0–250)."""
-    nm = int(round(float(radius_km) / KT_TO_KMH))
-    return max(1, min(250, nm))
-
-
 def bbox_from_radius(lat: float, lon: float, radius_km: float | None = None) -> tuple[float, float, float, float]:
     """Bbox approssimata (lamin, lomin, lamax, lomax). L'API usa il raggio in NM, non questa bbox."""
     radius = float(RADIUS_KM if radius_km is None else radius_km)
@@ -110,14 +102,6 @@ def bbox_from_radius(lat: float, lon: float, radius_km: float | None = None) -> 
     lomin = max(-180.0, lon - dlon)
     lomax = min(180.0, lon + dlon)
     return (round(lamin, 6), round(lomin, 6), round(lamax, 6), round(lomax, 6))
-
-
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlmb = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2.0) ** 2
-    return 2.0 * EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(a)))
 
 
 def _as_str(value: Any) -> str | None:
@@ -320,6 +304,7 @@ def _bundle(
     code: str | None = None,
     raw_count: int = 0,
     request_ms: float | None = None,
+    provider: str | None = None,
 ) -> dict[str, Any]:
     rows = [plane.as_row() for plane in (aircraft or [])]
     return {
@@ -334,7 +319,7 @@ def _bundle(
         "raw_count": raw_count,
         "valid": len(rows),
         "request_ms": request_ms,
-        "provider": "adsb.lol",
+        "provider": provider or "adsb.lol",
     }
 
 
@@ -392,7 +377,7 @@ def get_aircraft_nearby(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Aerei nell'area intorno a lat/lon. Solo ADSB.lol, niente Overpass."""
+    """Aerei nell'area intorno a lat/lon. airplanes.live, fallback ADSB.lol."""
     radius = float(RADIUS_KM if radius_km is None else radius_km)
     radius = max(MIN_RADIUS_KM, min(MAX_RADIUS_KM, radius))
     radius_nm = km_to_nm(radius)
@@ -403,10 +388,9 @@ def get_aircraft_nearby(
             log.info("[AIRTRAFFIC] cache_hit valid=%s", cached.get("valid"))
             return dict(cached)
 
-    log.info("[AIRTRAFFIC] provider=adsb.lol")
     log.info("[AIRTRAFFIC] city=lat=%.5f lon=%.5f", lat, lon)
-    http, body, _hdrs, request_ms = get_nearby(lat, lon, radius_nm)
-    log.info("[AIRTRAFFIC] request_ms=%.0f", request_ms)
+    http, body, _hdrs, request_ms, provider = fetch_nearby(lat, lon, radius_nm)
+    log.info("[AIRTRAFFIC] provider=%s request_ms=%.0f", provider, request_ms)
     if http != 200:
         code = _error_code(http)
         log.info("[AIRTRAFFIC] aircraft_count=0 error=%s http=%s", code, http if http > 0 else "000")
@@ -418,6 +402,7 @@ def get_aircraft_nearby(
             error=code,
             code=code,
             request_ms=request_ms,
+            provider=provider,
         )
 
     payload, bad_json = _parse_payload(body)
@@ -431,6 +416,7 @@ def get_aircraft_nearby(
             error="bad_json",
             code="bad_json",
             request_ms=request_ms,
+            provider=provider,
         )
 
     raw_rows = payload.get("ac")
@@ -459,6 +445,7 @@ def get_aircraft_nearby(
         http=http,
         raw_count=raw_count,
         request_ms=request_ms,
+        provider=provider,
     )
     _cache_put(key, result)
     return result
@@ -543,7 +530,15 @@ def format_aircraft(
     if not rows:
         return empty_text(place)
     chunk = rows[offset : offset + limit]
-    lines = [f"✈️ <b>AEREI LIVE — {e(_place_label(place))}</b>", ""]
+    radius = bundle.get("radius_km")
+    lines = [
+        f"✈️ <b>AEREI LIVE — {e(_place_label(place))}</b>",
+        f"📍 {e(_place_title(place))}",
+    ]
+    if isinstance(radius, (int, float)):
+        lines.append(f"📡 Raggio: {int(round(radius))} km")
+    lines.append(f"✈️ {len(rows)} aircraft rilevati")
+    lines.append("")
     for i, item in enumerate(chunk):
         lines.extend(_plane_block(offset + i + 1, item))
         lines.append("")
