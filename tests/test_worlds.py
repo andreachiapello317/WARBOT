@@ -19,8 +19,8 @@ from core.session import (
 from worlds.city import city_prompt_text, format_worlds
 from worlds.osm.menu import menu_text as osm_menu_text
 from worlds.osm.queries import engine_id, public_id
-from worlds.opensky.menu import menu_text as sky_menu_text
-from worlds.opensky.queries import get_query
+from worlds.airtraffic.menu import menu_text as air_menu_text
+from worlds.airtraffic.queries import get_query
 from worlds.registry import WORLD_META, parse_callback, world_menu_items
 
 
@@ -80,15 +80,16 @@ def _hit(place: dict) -> dict:
 class RegistryTest(unittest.TestCase):
     def test_two_worlds_no_invented_third(self) -> None:
         ids = [item["id"] for item in WORLD_META]
-        self.assertEqual(ids, ["osm", "opensky"])
+        self.assertEqual(ids, ["osm", "airtraffic"])
         items = world_menu_items()
         self.assertEqual(items[0]["callback"], "world:osm")
-        self.assertEqual(items[1]["callback"], "world:opensky")
+        self.assertEqual(items[1]["callback"], "world:airtraffic")
 
     def test_parse_callback_hierarchy(self) -> None:
         self.assertEqual(parse_callback("world:osm"), ("world", ["osm"]))
         self.assertEqual(parse_callback("osm:rail:page:2"), ("osm", ["rail", "page", "2"]))
-        self.assertEqual(parse_callback("opensky:aircraft:page:1"), ("opensky", ["aircraft", "page", "1"]))
+        self.assertEqual(parse_callback("airtraffic:aircraft:page:1"), ("airtraffic", ["aircraft", "page", "1"]))
+        self.assertEqual(parse_callback("world:airtraffic"), ("world", ["airtraffic"]))
         self.assertEqual(parse_callback("city:ask"), ("city", ["ask"]))
 
 
@@ -103,6 +104,15 @@ class CityContextTest(unittest.TestCase):
         self.assertIn("geocoding", city)
         self.assertEqual(get_city(ctx)["lat"], 45.4642)  # type: ignore[index]
 
+    def test_change_city_clears_airtraffic_state(self) -> None:
+        from core.session import airtraffic_state
+
+        ctx = FakeContext()
+        set_city(ctx, MILANO)  # type: ignore[arg-type]
+        airtraffic_state(ctx)["bundle"] = {"ok": True, "aircraft": [{"icao24": "old"}]}  # type: ignore[arg-type]
+        set_city(ctx, TOKYO)  # type: ignore[arg-type]
+        self.assertNotIn("bundle", airtraffic_state(ctx))  # type: ignore[arg-type]
+
     def test_start_text(self) -> None:
         text = city_prompt_text()
         self.assertIn("WARBOT", text)
@@ -113,7 +123,8 @@ class CityContextTest(unittest.TestCase):
         text = format_worlds(city_from_hit(MILANO))
         self.assertIn("Milano", text)
         self.assertIn("OSM WORLD", text)
-        self.assertIn("OPEN SKY", text)
+        self.assertIn("AIR TRAFFIC", text)
+        self.assertNotIn("OPEN SKY", text)
         self.assertNotIn("Stazioni", text)
         self.assertNotIn("Aeroporti", text)
 
@@ -127,17 +138,19 @@ class QueryMapTest(unittest.TestCase):
         osm = osm_menu_text(city_from_hit(MILANO))
         self.assertIn("Stazioni", osm)
         self.assertIn("OSM WORLD", osm)
+        self.assertNotIn("AIR TRAFFIC", osm)
         self.assertNotIn("OPEN SKY", osm)
 
-    def test_opensky_documented_only(self) -> None:
+    def test_airtraffic_documented_only(self) -> None:
         self.assertIsNotNone(get_query("aircraft"))
-        self.assertIsNotNone(get_query("nearby"))
-        self.assertIsNotNone(get_query("traffic"))
+        self.assertIsNone(get_query("nearby"))
+        self.assertIsNone(get_query("traffic"))
         self.assertIsNone(get_query("arrival"))
         self.assertIsNone(get_query("departure"))
-        sky = sky_menu_text(city_from_hit(MILANO))
-        self.assertIn("Aerei LIVE", sky)
-        self.assertNotIn("Stazioni", sky)
+        air = air_menu_text(city_from_hit(MILANO))
+        self.assertIn("Aerei LIVE", air)
+        self.assertIn("AIR TRAFFIC", air)
+        self.assertNotIn("Stazioni", air)
 
 
 class FlowTest(unittest.IsolatedAsyncioTestCase):
@@ -145,8 +158,6 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         self.update = FakeUpdate()
         self.ctx = FakeContext()
         self.geocode_calls = 0
-        self.overpass_calls = 0
-        self.opensky_calls = 0
 
     def _geocode(self, query: str):
         self.geocode_calls += 1
@@ -156,7 +167,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
     async def test_start_milano_world_menu_no_external_query(self) -> None:
         from worlds.city import lookup_city, show_city_prompt, show_worlds
         from worlds.osm.handler import show_menu as osm_menu
-        from worlds.opensky.handler import show_menu as sky_menu
+        from worlds.airtraffic.handler import show_menu as air_menu
 
         await show_city_prompt(self.update, self.ctx)  # type: ignore[arg-type]
         last = self.ctx.bot.edits[-1]["text"] if self.ctx.bot.edits else self.ctx.bot.sends[-1]["text"]
@@ -165,12 +176,12 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch("worlds.city.geocode", side_effect=self._geocode),
             patch("worlds.osm.queries.search") as osm_search,
-            patch("worlds.opensky.queries.get_aircraft_in_bbox") as sky_search,
+            patch("worlds.airtraffic.queries.get_aircraft_in_area") as air_search,
             patch("services.live.osm.search") as osm_search2,
         ):
             osm_search.side_effect = AssertionError("Overpass sul WORLD MENU")
             osm_search2.side_effect = AssertionError("Overpass sul WORLD MENU")
-            sky_search.side_effect = AssertionError("OpenSky sul WORLD MENU")
+            air_search.side_effect = AssertionError("ADSB.lol sul WORLD MENU")
             await lookup_city(self.update, self.ctx, "Milano")  # type: ignore[arg-type]
             self.assertEqual(self.geocode_calls, 1)
             city = get_city(self.ctx)  # type: ignore[arg-type]
@@ -178,7 +189,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
             menu = self.ctx.bot.edits[-1]["text"]
             self.assertIn("Scegli un mondo", menu)
             self.assertIn("OSM WORLD", menu)
-            self.assertIn("OPEN SKY", menu)
+            self.assertIn("AIR TRAFFIC", menu)
             self.assertNotIn("Stazioni ferroviarie", menu)
 
             await osm_menu(self.update, self.ctx)  # type: ignore[arg-type]
@@ -186,14 +197,14 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("OSM WORLD", osm_txt)
             self.assertIn("Stazioni", osm_txt)
 
-            await sky_menu(self.update, self.ctx)  # type: ignore[arg-type]
-            sky_txt = self.ctx.bot.edits[-1]["text"]
-            self.assertIn("OPEN SKY", sky_txt)
-            self.assertIn("Aerei LIVE", sky_txt)
+            await air_menu(self.update, self.ctx)  # type: ignore[arg-type]
+            air_txt = self.ctx.bot.edits[-1]["text"]
+            self.assertIn("AIR TRAFFIC", air_txt)
+            self.assertIn("Aerei LIVE", air_txt)
 
             await show_worlds(self.update, self.ctx)  # type: ignore[arg-type]
             await osm_menu(self.update, self.ctx)  # type: ignore[arg-type]
-            await sky_menu(self.update, self.ctx)  # type: ignore[arg-type]
+            await air_menu(self.update, self.ctx)  # type: ignore[arg-type]
             self.assertEqual(self.geocode_calls, 1)
             self.assertEqual(get_city(self.ctx)["lat"], 45.4642)  # type: ignore[index]
 
@@ -207,32 +218,71 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
             patch("worlds.osm.queries.peek", return_value=None),
             patch("worlds.osm.handler.peek_query", return_value=None),
             patch("worlds.osm.handler.run_query", return_value=fake_bundle) as run,
-            patch("worlds.opensky.queries.get_aircraft_in_bbox") as sky,
+            patch("worlds.airtraffic.queries.get_aircraft_in_area") as air,
         ):
-            sky.side_effect = AssertionError("OpenSky non deve partire da OSM stazioni")
+            air.side_effect = AssertionError("ADSB.lol non deve partire da OSM stazioni")
             await show_query(self.update, self.ctx, "rail")  # type: ignore[arg-type]
             run.assert_called_once()
             text = self.ctx.bot.edits[-1]["text"]
             self.assertIn("Centrale", text)
 
-    async def test_opensky_aircraft_calls_only_opensky(self) -> None:
-        from worlds.opensky.handler import show_query
+    async def test_airtraffic_aircraft_calls_only_adsb(self) -> None:
+        from worlds.airtraffic.handler import show_query
 
         set_city(self.ctx, MILANO)  # type: ignore[arg-type]
-        fake = {"ok": True, "aircraft": [{"icao24": "abc", "callsign": "AZA123", "distance_km": 12, "altitude": 8000, "velocity": 200, "heading": 90, "on_ground": False}], "time": 1}
+        fake = {
+            "ok": True,
+            "aircraft": [
+                {
+                    "icao24": "4ca123",
+                    "callsign": "AZA123",
+                    "distance_km": 18.4,
+                    "altitude": 8420,
+                    "velocity": 760,
+                    "heading": 245,
+                    "on_ground": False,
+                }
+            ],
+            "time": 1,
+        }
 
         with (
-            patch("worlds.opensky.queries.get_aircraft_in_bbox", return_value=fake) as sky,
+            patch("worlds.airtraffic.queries.get_aircraft_in_area", return_value=fake) as air,
             patch("worlds.osm.queries.search") as osm,
         ):
-            osm.side_effect = AssertionError("Overpass non deve partire da OpenSky")
+            osm.side_effect = AssertionError("Overpass non deve partire da AIR TRAFFIC")
             await show_query(self.update, self.ctx, "aircraft")  # type: ignore[arg-type]
-            sky.assert_called_once()
-            args, _kwargs = sky.call_args
+            air.assert_called_once()
+            args, _kwargs = air.call_args
             self.assertAlmostEqual(args[0], 45.4642, places=3)
             self.assertAlmostEqual(args[1], 9.1900, places=3)
             text = self.ctx.bot.edits[-1]["text"]
             self.assertIn("AZA123", text)
+            self.assertIn("ICAO: 4CA123", text)
+
+    async def test_airtraffic_pagination_does_not_requery(self) -> None:
+        from worlds.airtraffic.handler import show_page, show_query
+
+        set_city(self.ctx, MILANO)  # type: ignore[arg-type]
+        rows = [
+            {
+                "icao24": f"{i:06x}",
+                "callsign": f"CS{i:03d}",
+                "distance_km": float(i),
+                "altitude": 8000,
+                "velocity": 700,
+                "heading": 90,
+                "on_ground": False,
+            }
+            for i in range(25)
+        ]
+        fake = {"ok": True, "aircraft": rows, "time": 1}
+        with patch("worlds.airtraffic.queries.get_aircraft_in_area", return_value=fake) as air:
+            await show_query(self.update, self.ctx, "aircraft")  # type: ignore[arg-type]
+            await show_page(self.update, self.ctx, "aircraft", 1)  # type: ignore[arg-type]
+            self.assertEqual(air.call_count, 1)
+        text = self.ctx.bot.edits[-1]["text"]
+        self.assertIn("CS020", text)
 
     async def test_change_city_tokyo_no_query_on_menu(self) -> None:
         from worlds.city import lookup_city
@@ -241,10 +291,10 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch("worlds.city.geocode", side_effect=self._geocode),
             patch("worlds.osm.queries.search") as osm,
-            patch("worlds.opensky.queries.get_aircraft_in_bbox") as sky,
+            patch("worlds.airtraffic.queries.get_aircraft_in_area") as air,
         ):
             osm.side_effect = AssertionError("no overpass")
-            sky.side_effect = AssertionError("no opensky")
+            air.side_effect = AssertionError("no adsb")
             await lookup_city(self.update, self.ctx, "Tokyo")  # type: ignore[arg-type]
             city = get_city(self.ctx)  # type: ignore[arg-type]
             self.assertEqual(city["name"], "Tokyo")
@@ -264,13 +314,26 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         text = self.ctx.bot.edits[-1]["text"]
         self.assertIn("Scegli un mondo", text)
 
+    async def test_back_from_airtraffic_results_to_menu(self) -> None:
+        from bot import go_back
+        from core.session import SCREEN_AIRTRAFFIC_RESULTS, set_screen
+        from worlds.airtraffic.handler import show_menu as air_menu
+
+        set_city(self.ctx, MILANO)  # type: ignore[arg-type]
+        await air_menu(self.update, self.ctx)  # type: ignore[arg-type]
+        set_screen(self.ctx, SCREEN_AIRTRAFFIC_RESULTS)  # type: ignore[arg-type]
+        await go_back(self.update, self.ctx)  # type: ignore[arg-type]
+        text = self.ctx.bot.edits[-1]["text"]
+        self.assertIn("AIR TRAFFIC", text)
+        self.assertIn("Aerei LIVE", text)
+
     async def test_dispatch_world_switch_no_geocode(self) -> None:
         from bot import dispatch
 
         set_city(self.ctx, MILANO)  # type: ignore[arg-type]
         with patch("worlds.city.geocode") as geo:
             await dispatch(self.update, self.ctx, "world:osm")  # type: ignore[arg-type]
-            await dispatch(self.update, self.ctx, "world:opensky")  # type: ignore[arg-type]
+            await dispatch(self.update, self.ctx, "world:airtraffic")  # type: ignore[arg-type]
             await dispatch(self.update, self.ctx, "world:list")  # type: ignore[arg-type]
             geo.assert_not_called()
             self.assertEqual(get_city(self.ctx)["name"], "Milano")  # type: ignore[index]

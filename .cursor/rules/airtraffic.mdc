@@ -1,0 +1,18 @@
+---
+description: AIR TRAFFIC usa ADSB.lol, senza credenziali e senza OpenSky
+globs: worlds/airtraffic/**,services/live/aircraft.py,services/live/adsb_client.py
+alwaysApply: false
+---
+
+# AIR TRAFFIC — ADSB.lol
+
+Sorgente unica degli aerei LIVE: API pubblica ADSB.lol.
+
+- Endpoint: `GET https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{radius}`
+- `radius` è in miglia nautiche intere (0–250). Default WARBOT: 50 km ≈ 27 nm.
+- Nessuna API key, username, password, client secret.
+- Query solo quando l'utente apre ✈️ Aerei LIVE. Niente polling.
+- Usare il CityContext già geocodificato (`city.lat` / `city.lon`). Non rifare il geocoding.
+- Cache breve (pochi secondi) solo per callback ravvicinati.
+- Paginazione nel modulo Air Traffic, 20 risultati.
+- OpenSky non esiste più in questo progetto: non reintrodurlo.

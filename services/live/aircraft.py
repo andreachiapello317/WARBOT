@@ -1,22 +1,11 @@
-"""LIVE DATA — Aerei via OpenSky Network. Non usa Overpass.
+"""LIVE DATA — Aerei via ADSB.lol. Non usa Overpass.
 
 Documentazione ufficiale:
-https://openskynetwork.github.io/opensky-api/
-https://openskynetwork.github.io/opensky-api/rest.html
-https://openskynetwork.github.io/opensky-api/python.html
+https://api.adsb.lol/docs
+https://api.adsb.lol/api/openapi.json
 
-Root REST: https://opensky-network.org/api
-Operazione: GET /states/all
-Bbox REST: lamin, lomin, lamax, lomax (WGS84).
-Python API 1.4.0 get_states(bbox=(min_lat, max_lat, min_lon, max_lon))
-mappa gli stessi quattro valori e manda sempre extended=True.
-
-Auth (REST / Python 1.4.0): OAuth2 client credentials via OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET.
-Senza quelle variabili OpenSky non parte: niente accesso anonimo.
-Basic username/password non è più accettato. Niente credentials.json.
-
-OpenSky può bloccare IP di hyperscaler: da alcuni cloud la GET
-fallisce in handshake TLS. Non esiste un endpoint alternativo documentato.
+GET /v2/lat/{lat}/lon/{lon}/dist/{radius}
+radius: miglia nautiche intere, 0–250. Nessuna autenticazione sull'API pubblica.
 """
 
 from __future__ import annotations
@@ -30,35 +19,20 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from services.live.opensky_client import get_opensky_client
+from services.live.adsb_client import get_nearby
 from services.live.osm import LIST_LIMIT, clip, e
 
-log = logging.getLogger("warbot.aircraft")
-
-# Indici state vector OpenSky REST (documentazione ufficiale).
-IDX_ICAO24 = 0
-IDX_CALLSIGN = 1
-IDX_ORIGIN_COUNTRY = 2
-IDX_TIME_POSITION = 3
-IDX_LAST_CONTACT = 4
-IDX_LONGITUDE = 5
-IDX_LATITUDE = 6
-IDX_BARO_ALTITUDE = 7
-IDX_ON_GROUND = 8
-IDX_VELOCITY = 9
-IDX_TRUE_TRACK = 10
-IDX_VERTICAL_RATE = 11
-IDX_GEO_ALTITUDE = 13
-# extended=1 (Python API get_states): category è all'indice 17. Non serve in Telegram.
+log = logging.getLogger("warbot.airtraffic")
 
 EARTH_RADIUS_KM = 6371.0
 KM_PER_DEG_LAT = 111.32
-MS_TO_KMH = 3.6
-CACHE_TTL_DEFAULT = 10
+KT_TO_KMH = 1.852
+FT_TO_M = 0.3048
+FTMIN_TO_MS = 0.00508
+CACHE_TTL_DEFAULT = 8
 RADIUS_KM_DEFAULT = 50.0
-TIMEOUT_DEFAULT = 12
-MAX_RADIUS_KM = 150.0
-MIN_RADIUS_KM = 10.0
+MAX_RADIUS_KM = 460.0
+MIN_RADIUS_KM = 5.0
 
 _cache_lock = threading.Lock()
 _mem_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -90,10 +64,9 @@ def _float_env(name: str, default: float, *, lo: float | None = None, hi: float 
     return value
 
 
-RADIUS_KM = _float_env("OPENSKY_RADIUS_KM", RADIUS_KM_DEFAULT, lo=MIN_RADIUS_KM, hi=MAX_RADIUS_KM)
-TIMEOUT_S = _int_env("OPENSKY_TIMEOUT", TIMEOUT_DEFAULT, lo=5, hi=25)
-CACHE_TTL = _int_env("OPENSKY_CACHE_TTL", CACHE_TTL_DEFAULT, lo=0, hi=20)
-PAGE_SIZE = _int_env("OPENSKY_PAGE_SIZE", LIST_LIMIT, lo=5, hi=40)
+RADIUS_KM = _float_env("AIRTRAFFIC_RADIUS_KM", RADIUS_KM_DEFAULT, lo=MIN_RADIUS_KM, hi=MAX_RADIUS_KM)
+CACHE_TTL = _int_env("AIRTRAFFIC_CACHE_TTL", CACHE_TTL_DEFAULT, lo=0, hi=20)
+PAGE_SIZE = _int_env("AIRTRAFFIC_PAGE_SIZE", LIST_LIMIT, lo=5, hi=40)
 
 
 @dataclass(frozen=True)
@@ -109,48 +82,34 @@ class Aircraft:
     on_ground: bool | None
     timestamp: int | None
     distance_km: float
-    origin_country: str | None = None
+    registration: str | None = None
+    ac_type: str | None = None
 
     def as_row(self) -> dict[str, Any]:
         return asdict(self)
 
 
-# ---------------------------------------------------------------------------
-# 1. Bbox intorno a lat/lon (raggio configurabile, default ~50 km)
-# ---------------------------------------------------------------------------
+def km_to_nm(radius_km: float) -> int:
+    """ADSB.lol vuole il raggio in miglia nautiche intere (0–250)."""
+    nm = int(round(float(radius_km) / KT_TO_KMH))
+    return max(1, min(250, nm))
 
 
 def bbox_from_radius(lat: float, lon: float, radius_km: float | None = None) -> tuple[float, float, float, float]:
-    """Restituisce (lamin, lomin, lamax, lomax) per OpenSky.
-
-    1° di latitudine ≈ 111.32 km.
-    1° di longitudine ≈ 111.32 · cos(lat) km.
-    """
+    """Bbox approssimata (lamin, lomin, lamax, lomax). L'API usa il raggio in NM, non questa bbox."""
     radius = float(RADIUS_KM if radius_km is None else radius_km)
     radius = max(MIN_RADIUS_KM, min(MAX_RADIUS_KM, radius))
     lat = max(-89.9, min(89.9, float(lat)))
     lon = float(lon)
     dlat = radius / KM_PER_DEG_LAT
     cos_lat = math.cos(math.radians(lat))
-    # Evita esplosione vicino ai poli senza allargare la bbox oltre il raggio.
     safe_cos = max(0.08, abs(cos_lat))
     dlon = radius / (KM_PER_DEG_LAT * safe_cos)
     lamin = max(-90.0, lat - dlat)
     lamax = min(90.0, lat + dlat)
-    lomin = lon - dlon
-    lomax = lon + dlon
-    if lomin < -180.0:
-        lomin = max(-180.0, lomin)
-    if lomax > 180.0:
-        lomax = min(180.0, lomax)
-    if lamin >= lamax or lomin >= lomax:
-        raise ValueError("bbox OpenSky non valida")
+    lomin = max(-180.0, lon - dlon)
+    lomax = min(180.0, lon + dlon)
     return (round(lamin, 6), round(lomin, 6), round(lamax, 6), round(lomax, 6))
-
-
-# ---------------------------------------------------------------------------
-# 2. Distanza geografica (haversine)
-# ---------------------------------------------------------------------------
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -159,11 +118,6 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlmb = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2.0) ** 2
     return 2.0 * EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(a)))
-
-
-# ---------------------------------------------------------------------------
-# 3. Normalizzazione state vector
-# ---------------------------------------------------------------------------
 
 
 def _as_str(value: Any) -> str | None:
@@ -175,6 +129,8 @@ def _as_str(value: Any) -> str | None:
 
 def _as_float(value: Any) -> float | None:
     if value is None or value == "":
+        return None
+    if isinstance(value, str) and value.strip().lower() == "ground":
         return None
     try:
         number = float(value)
@@ -192,119 +148,142 @@ def _as_int(value: Any) -> int | None:
     return int(number)
 
 
-def _as_bool(value: Any) -> bool | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        low = value.strip().lower()
-        if low in {"true", "1", "yes"}:
-            return True
-        if low in {"false", "0", "no"}:
-            return False
-    return None
-
-
 def _valid_coord(lat: float | None, lon: float | None) -> bool:
     if lat is None or lon is None:
         return False
     return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
 
 
-def parse_state(row: Any, *, center_lat: float, center_lon: float) -> Aircraft | None:
-    """Normalizza un state vector OpenSky. None se inutilizzabile."""
-    if not isinstance(row, (list, tuple)) or len(row) < 7:
+def _coords(raw: dict[str, Any]) -> tuple[float | None, float | None]:
+    lat = _as_float(raw.get("lat"))
+    lon = _as_float(raw.get("lon"))
+    if _valid_coord(lat, lon):
+        return lat, lon
+    last = raw.get("lastPosition")
+    if isinstance(last, dict):
+        lat = _as_float(last.get("lat"))
+        lon = _as_float(last.get("lon"))
+        if _valid_coord(lat, lon):
+            return lat, lon
+    return None, None
+
+
+def _altitude_m(raw: dict[str, Any]) -> tuple[float | None, bool | None]:
+    alt_baro = raw.get("alt_baro")
+    if isinstance(alt_baro, str) and alt_baro.strip().lower() == "ground":
+        return 0.0, True
+    alt_ft = _as_float(alt_baro)
+    if alt_ft is None:
+        alt_ft = _as_float(raw.get("alt_geom"))
+    if alt_ft is None:
+        return None, None
+    return alt_ft * FT_TO_M, False
+
+
+def _heading(raw: dict[str, Any]) -> float | None:
+    for key in ("track", "true_heading", "mag_heading", "calc_track"):
+        value = _as_float(raw.get(key))
+        if value is not None:
+            return value % 360.0
+    return None
+
+
+def _timestamp(raw: dict[str, Any], now_ms: int | None) -> int | None:
+    seen = _as_float(raw.get("seen"))
+    if now_ms is None:
+        if seen is None:
+            return None
+        return int(time.time() - max(0.0, seen))
+    now = float(now_ms)
+    if now > 1e12:
+        now = now / 1000.0
+    if seen is not None:
+        now -= max(0.0, seen)
+    return int(now)
+
+
+def parse_ac(raw: Any, *, center_lat: float, center_lon: float) -> Aircraft | None:
+    """Normalizza un oggetto aircraft ADSB.lol. None se inutilizzabile."""
+    if not isinstance(raw, dict):
         return None
-    icao24 = (_as_str(row[IDX_ICAO24]) or "").lower()
+    icao24 = (_as_str(raw.get("hex")) or "").lower()
     if not icao24:
         return None
-    lon = _as_float(row[IDX_LONGITUDE])
-    lat = _as_float(row[IDX_LATITUDE])
-    if not _valid_coord(lat, lon):
+    lat, lon = _coords(raw)
+    if lat is None or lon is None:
         return None
-    callsign = _as_str(row[IDX_CALLSIGN] if len(row) > IDX_CALLSIGN else None)
-    origin = _as_str(row[IDX_ORIGIN_COUNTRY] if len(row) > IDX_ORIGIN_COUNTRY else None)
-    baro = _as_float(row[IDX_BARO_ALTITUDE] if len(row) > IDX_BARO_ALTITUDE else None)
-    geo = _as_float(row[IDX_GEO_ALTITUDE] if len(row) > IDX_GEO_ALTITUDE else None)
-    altitude = baro if baro is not None else geo
-    on_ground = _as_bool(row[IDX_ON_GROUND] if len(row) > IDX_ON_GROUND else None)
-    velocity = _as_float(row[IDX_VELOCITY] if len(row) > IDX_VELOCITY else None)
-    heading = _as_float(row[IDX_TRUE_TRACK] if len(row) > IDX_TRUE_TRACK else None)
-    vertical_rate = _as_float(row[IDX_VERTICAL_RATE] if len(row) > IDX_VERTICAL_RATE else None)
-    ts = _as_int(row[IDX_LAST_CONTACT] if len(row) > IDX_LAST_CONTACT else None)
-    if ts is None:
-        ts = _as_int(row[IDX_TIME_POSITION] if len(row) > IDX_TIME_POSITION else None)
+    altitude, on_ground = _altitude_m(raw)
+    gs_kt = _as_float(raw.get("gs"))
+    velocity = gs_kt * KT_TO_KMH if gs_kt is not None else None
+    vrate_ftmin = _as_float(raw.get("baro_rate"))
+    if vrate_ftmin is None:
+        vrate_ftmin = _as_float(raw.get("geom_rate"))
+    vertical_rate = vrate_ftmin * FTMIN_TO_MS if vrate_ftmin is not None else None
     distance = haversine_km(center_lat, center_lon, lat, lon)
     return Aircraft(
         icao24=icao24,
-        callsign=callsign,
+        callsign=_as_str(raw.get("flight")),
         lat=lat,
         lon=lon,
         altitude=altitude,
         velocity=velocity,
-        heading=heading,
+        heading=_heading(raw),
         vertical_rate=vertical_rate,
         on_ground=on_ground,
-        timestamp=ts,
+        timestamp=_timestamp(raw, _as_int(raw.get("_now"))),
         distance_km=distance,
-        origin_country=origin,
+        registration=_as_str(raw.get("r")),
+        ac_type=_as_str(raw.get("t")),
     )
 
 
-def normalize_states(
-    states: Any,
+def normalize_aircraft(
+    rows: Any,
     *,
     center_lat: float,
     center_lon: float,
     radius_km: float,
+    now_ms: int | None = None,
 ) -> list[Aircraft]:
-    if not isinstance(states, list):
+    if not isinstance(rows, list):
         return []
     by_icao: dict[str, Aircraft] = {}
-    for raw in states:
-        plane = parse_state(raw, center_lat=center_lat, center_lon=center_lon)
+    for raw in rows:
+        item = raw
+        if isinstance(raw, dict) and now_ms is not None and "_now" not in raw:
+            item = dict(raw)
+            item["_now"] = now_ms
+        plane = parse_ac(item, center_lat=center_lat, center_lon=center_lon)
         if plane is None:
             continue
         if plane.distance_km > radius_km + 0.5:
             continue
         prev = by_icao.get(plane.icao24)
-        if prev is None:
-            by_icao[plane.icao24] = plane
-            continue
-        prev_ts = prev.timestamp or 0
-        new_ts = plane.timestamp or 0
-        if new_ts >= prev_ts:
+        if prev is None or (plane.timestamp or 0) >= (prev.timestamp or 0):
             by_icao[plane.icao24] = plane
     return list(by_icao.values())
 
 
 def sort_aircraft(planes: list[Aircraft]) -> list[Aircraft]:
-    """In volo, poi distanza dal centro, poi quota. Tie-break icao24. Deterministico."""
+    """Distanza dalla città, poi in volo prima di terra, tie-break icao24."""
 
     def key(plane: Aircraft) -> tuple:
+        dist = round(plane.distance_km, 3)
         if plane.on_ground is False:
             ground_rank = 0
         elif plane.on_ground is None:
             ground_rank = 1
         else:
             ground_rank = 2
-        dist = round(plane.distance_km, 3)
-        alt = plane.altitude
-        # Quota mancante in coda al gruppo; a parità di distanza quota più alta prima.
-        alt_missing = 1 if alt is None else 0
-        alt_order = -float(alt) if alt is not None else 0.0
-        return (ground_rank, dist, alt_missing, alt_order, plane.icao24)
+        return (dist, ground_rank, plane.icao24)
 
     return sorted(planes, key=key)
 
 
-def velocity_kmh(meters_per_second: float | None) -> int | None:
-    if meters_per_second is None:
+def velocity_kmh(kmh: float | None) -> int | None:
+    if kmh is None:
         return None
-    return int(round(meters_per_second * MS_TO_KMH))
+    return int(round(kmh))
 
 
 def altitude_m(meters: float | None) -> int | None:
@@ -313,36 +292,20 @@ def altitude_m(meters: float | None) -> int | None:
     return int(round(meters))
 
 
-# ---------------------------------------------------------------------------
-# 4. Client HTTP OpenSky (OAuth2, sessione unica)
-# ---------------------------------------------------------------------------
-
-
 def _error_code(http: int, *, invalid_json: bool = False) -> str:
     if invalid_json:
         return "bad_json"
-    if http == -2:
-        return "not_configured"
     if http == 0:
         return "timeout"
-    if http in {401, 403}:
-        return "auth"
     if http == 429:
         return "rate"
     if http >= 500:
         return "unavailable"
+    if 400 <= http < 500:
+        return "unavailable"
     if http < 0:
         return "network"
     return "unavailable"
-
-
-def _request_states(bbox: tuple[float, float, float, float]) -> tuple[int, bytes, bool]:
-    client = get_opensky_client()
-    if not client.configured():
-        log.info("[OPENSKY] not_configured")
-        return -2, b"", False
-    http, body = client.get_states(bbox)
-    return http, body, True
 
 
 def _bundle(
@@ -350,25 +313,28 @@ def _bundle(
     ok: bool,
     aircraft: list[Aircraft] | None = None,
     time_unix: int | None = None,
-    bbox: tuple[float, float, float, float] | None = None,
     radius_km: float,
+    radius_nm: int | None = None,
     http: int | None = None,
     error: str | None = None,
     code: str | None = None,
-    raw_states: int = 0,
+    raw_count: int = 0,
+    request_ms: float | None = None,
 ) -> dict[str, Any]:
     rows = [plane.as_row() for plane in (aircraft or [])]
     return {
         "ok": ok,
         "aircraft": rows,
         "time": time_unix,
-        "bbox": bbox,
         "radius_km": radius_km,
+        "radius_nm": radius_nm,
         "http": http,
         "error": error,
         "code": code,
-        "raw_states": raw_states,
+        "raw_count": raw_count,
         "valid": len(rows),
+        "request_ms": request_ms,
+        "provider": "adsb.lol",
     }
 
 
@@ -392,15 +358,24 @@ def _cache_put(key: str, value: dict[str, Any]) -> None:
         return
     with _cache_lock:
         _mem_cache[key] = (time.time(), value)
+        if len(_mem_cache) > 64:
+            oldest = sorted(_mem_cache.items(), key=lambda item: item[1][0])[:16]
+            for stale, _ in oldest:
+                _mem_cache.pop(stale, None)
 
 
 def _cache_key(lat: float, lon: float, radius_km: float) -> str:
-    return f"air:{lat:.4f}:{lon:.4f}:{radius_km:.1f}"
+    return f"adsb:{lat:.4f}:{lon:.4f}:{radius_km:.1f}"
+
+
+def clear_aircraft_cache() -> None:
+    with _cache_lock:
+        _mem_cache.clear()
 
 
 def _parse_payload(body: bytes) -> tuple[dict[str, Any] | None, bool]:
     if not body:
-        return {"time": None, "states": []}, False
+        return {"ac": [], "now": None, "total": 0}, False
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -417,63 +392,76 @@ def get_aircraft_nearby(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Aerei nell'area intorno a lat/lon. Solo OpenSky, niente Overpass."""
+    """Aerei nell'area intorno a lat/lon. Solo ADSB.lol, niente Overpass."""
     radius = float(RADIUS_KM if radius_km is None else radius_km)
     radius = max(MIN_RADIUS_KM, min(MAX_RADIUS_KM, radius))
-    bbox = bbox_from_radius(lat, lon, radius)
+    radius_nm = km_to_nm(radius)
     key = _cache_key(lat, lon, radius)
     if not force:
         cached = _cache_get(key)
         if cached is not None:
-            log.info("[AIRCRAFT] cache_hit valid=%s", cached.get("valid"))
+            log.info("[AIRTRAFFIC] cache_hit valid=%s", cached.get("valid"))
             return dict(cached)
 
-    http, body, _used_auth = _request_states(bbox)
+    log.info("[AIRTRAFFIC] provider=adsb.lol")
+    log.info("[AIRTRAFFIC] city=lat=%.5f lon=%.5f", lat, lon)
+    http, body, _hdrs, request_ms = get_nearby(lat, lon, radius_nm)
+    log.info("[AIRTRAFFIC] request_ms=%.0f", request_ms)
     if http != 200:
         code = _error_code(http)
-        log.info("[AIRCRAFT] states=0")
-        log.info("[AIRCRAFT] valid=0")
-        log.info("[AIRCRAFT] error=%s", code)
-        return _bundle(ok=False, bbox=bbox, radius_km=radius, http=http, error=code, code=code)
+        log.info("[AIRTRAFFIC] aircraft_count=0 error=%s http=%s", code, http if http > 0 else "000")
+        return _bundle(
+            ok=False,
+            radius_km=radius,
+            radius_nm=radius_nm,
+            http=http,
+            error=code,
+            code=code,
+            request_ms=request_ms,
+        )
 
     payload, bad_json = _parse_payload(body)
     if payload is None or bad_json:
-        log.info("[AIRCRAFT] states=0")
-        log.info("[AIRCRAFT] valid=0")
+        log.info("[AIRTRAFFIC] aircraft_count=0 error=bad_json")
         return _bundle(
             ok=False,
-            bbox=bbox,
             radius_km=radius,
+            radius_nm=radius_nm,
             http=http,
             error="bad_json",
             code="bad_json",
+            request_ms=request_ms,
         )
 
-    raw_states = payload.get("states")
-    raw_count = len(raw_states) if isinstance(raw_states, list) else 0
+    raw_rows = payload.get("ac")
+    raw_count = len(raw_rows) if isinstance(raw_rows, list) else 0
+    now_ms = _as_int(payload.get("now"))
     planes = sort_aircraft(
-        normalize_states(raw_states, center_lat=float(lat), center_lon=float(lon), radius_km=radius)
+        normalize_aircraft(
+            raw_rows,
+            center_lat=float(lat),
+            center_lon=float(lon),
+            radius_km=radius,
+            now_ms=now_ms,
+        )
     )
-    time_unix = _as_int(payload.get("time"))
-    log.info("[AIRCRAFT] states=%s", raw_count)
-    log.info("[AIRCRAFT] valid=%s", len(planes))
-    log.info("[AIRCRAFT] states_ok")
+    time_unix = now_ms
+    if time_unix is not None and time_unix > 1e12:
+        time_unix = int(time_unix / 1000)
+    log.info("[AIRTRAFFIC] aircraft_count=%s", raw_count)
+    log.info("[AIRTRAFFIC] results=%s", min(PAGE_SIZE, len(planes)))
     result = _bundle(
         ok=True,
         aircraft=planes,
         time_unix=time_unix,
-        bbox=bbox,
         radius_km=radius,
+        radius_nm=radius_nm,
         http=http,
-        raw_states=raw_count,
+        raw_count=raw_count,
+        request_ms=request_ms,
     )
     _cache_put(key, result)
     return result
-
-
-# ---------------------------------------------------------------------------
-# 5. Presentazione Telegram
-# ---------------------------------------------------------------------------
 
 
 def _place_label(place: dict[str, Any] | None) -> str:
@@ -498,94 +486,48 @@ def _fmt_int(value: int) -> str:
     return f"{value:,}".replace(",", ".")
 
 
-def _fmt_distance(km: float) -> str:
-    if km < 1:
-        return "📍 < 1 km"
-    return f"📍 {int(round(km))} km"
+def _fmt_dist_km(km: float) -> str:
+    if km < 0.1:
+        return "< 0.1 km"
+    return f"{km:.1f} km"
 
 
-def _age_label(unix_ts: int | None) -> str:
-    if unix_ts is None:
-        return "pochi secondi fa"
-    age = max(0, int(time.time()) - int(unix_ts))
-    if age < 20:
-        return "pochi secondi fa"
-    if age < 60:
-        return f"{age} secondi fa"
-    minutes = age // 60
-    if minutes == 1:
-        return "1 minuto fa"
-    if minutes < 60:
-        return f"{minutes} minuti fa"
-    return "dati non recenti"
-
-
-def _plane_lines(row: dict[str, Any]) -> list[str]:
-    on_ground = row.get("on_ground")
-    mark = "🛬" if on_ground is True else "🛫"
+def _plane_block(index: int, row: dict[str, Any]) -> list[str]:
     title = row.get("callsign") or (str(row.get("icao24") or "").upper()) or "n/d"
-    lines = [f"{mark} <b>{e(title)}</b>"]
-    dist = row.get("distance_km")
-    if isinstance(dist, (int, float)):
-        lines.append(_fmt_distance(float(dist)))
-    alt = altitude_m(_as_float(row.get("altitude")))
-    if alt is not None:
-        lines.append(f"⬆️ {_fmt_int(alt)} m")
-    speed = velocity_kmh(_as_float(row.get("velocity")))
-    if speed is not None:
-        lines.append(f"💨 {_fmt_int(speed)} km/h")
-    heading = _as_float(row.get("heading"))
-    if heading is not None:
-        lines.append(f"🧭 {int(round(heading)) % 360}°")
+    lines = [f"{index}. <b>{e(title)}</b>"]
     icao = _as_str(row.get("icao24"))
     if icao:
-        lines.append(f"🆔 {e(icao.upper())}")
-    vrate = _as_float(row.get("vertical_rate"))
-    if vrate is not None:
-        sign = "+" if vrate > 0 else ""
-        lines.append(f"↕️ {sign}{vrate:.1f} m/s")
+        lines.append(f"   ICAO: {e(icao.upper())}")
+    if row.get("on_ground") is True:
+        lines.append("   Alt: a terra")
+    else:
+        alt = altitude_m(_as_float(row.get("altitude")))
+        if alt is not None:
+            lines.append(f"   Alt: {_fmt_int(alt)} m")
+    speed = velocity_kmh(_as_float(row.get("velocity")))
+    if speed is not None:
+        lines.append(f"   Speed: {_fmt_int(speed)} km/h")
+    heading = _as_float(row.get("heading"))
+    if heading is not None:
+        lines.append(f"   Heading: {int(round(heading)) % 360}°")
+    dist = row.get("distance_km")
+    if isinstance(dist, (int, float)):
+        lines.append(f"   Distanza: {_fmt_dist_km(float(dist))}")
     return lines
 
 
 def error_text(bundle: dict[str, Any], place: dict[str, Any] | None = None) -> str:
-    code = bundle.get("code") or bundle.get("error")
     title = f"✈️ <b>AEREI LIVE — {e(_place_label(place))}</b>"
-    if code == "rate":
-        body = "⚠️ OpenSky ha raggiunto il limite di richieste.\nRiprova tra poco."
-    elif code == "not_configured":
-        body = (
-            "⚠️ OpenSky non è configurato.\n"
-            "Imposta OPENSKY_CLIENT_ID e OPENSKY_CLIENT_SECRET nelle variabili d'ambiente."
-        )
-    elif code == "auth":
-        if bundle.get("http") == 403:
-            body = (
-                "⚠️ OpenSky ha bloccato la richiesta da questo server.\n"
-                "Su Render l'API a volte risponde 403: le credenziali ci sono, l'IP cloud no."
-            )
-        else:
-            body = (
-                "⚠️ OpenSky ha rifiutato le credenziali.\n"
-                "Su Render imposta OPENSKY_CLIENT_ID e OPENSKY_CLIENT_SECRET "
-                "(client OAuth2, non username/password), senza virgolette."
-            )
-    elif code == "timeout":
-        body = (
-            "⚠️ OpenSky non completa la connessione da questo server.\n"
-            "Le credenziali ci sono. Da Render l'handshake TLS verso OpenSky resta appeso "
-            "(blocco IP cloud, non un errore di città o di secret).\n"
-            "Riprovare dallo stesso server non basta."
-        )
-    else:
-        body = "⚠️ OpenSky non è momentaneamente disponibile.\nRiprova tra poco."
-    return clip(f"{title}\n\n{body}")
+    return clip(
+        f"{title}\n\n"
+        "⚠️ Servizio traffico aereo temporaneamente non disponibile.\n"
+        "Riprova tra poco."
+    )
 
 
 def empty_text(place: dict[str, Any] | None = None) -> str:
-    return clip(
-        f"✈️ <b>AEREI LIVE — {e(_place_label(place))}</b>\n\n"
-        "✈️ Nessun aereo rilevato nell'area."
-    )
+    name = _place_title(place)
+    return clip(f"✈️ Nessun aereo rilevato nell'area di {e(name)}.")
 
 
 def format_aircraft(
@@ -601,35 +543,17 @@ def format_aircraft(
     if not rows:
         return empty_text(place)
     chunk = rows[offset : offset + limit]
-    airborne = [r for r in chunk if r.get("on_ground") is False]
-    ground = [r for r in chunk if r.get("on_ground") is True]
-    unknown = [r for r in chunk if r.get("on_ground") is None]
-    mixed = bool(airborne) and bool(ground)
     lines = [f"✈️ <b>AEREI LIVE — {e(_place_label(place))}</b>", ""]
-
-    def emit(section: str | None, items: list[dict[str, Any]]) -> None:
-        if not items:
-            return
-        if section:
-            lines.append(section)
-            lines.append("")
-        for item in items:
-            lines.extend(_plane_lines(item))
-            lines.append("")
-
-    if mixed:
-        emit("🛫 IN VOLO", airborne)
-        emit("🛬 A TERRA", ground)
-        emit(None, unknown)
-    else:
-        emit(None, chunk)
-
+    for i, item in enumerate(chunk):
+        lines.extend(_plane_block(offset + i + 1, item))
+        lines.append("")
     while lines and lines[-1] == "":
         lines.pop()
-    lines.append("")
-    lines.append(f"🕐 Aggiornato: {_age_label(_as_int(bundle.get('time')))}")
     total = len(rows)
     shown = min(offset + len(chunk), total)
     if total > limit:
-        lines.append(f"{offset + 1}–{shown} di {total}")
+        page = offset // max(1, limit) + 1
+        pages = max(1, (total + limit - 1) // limit)
+        lines.append("")
+        lines.append(f"{offset + 1}–{shown} di {total} · pagina {page}/{pages}")
     return clip("\n".join(lines))

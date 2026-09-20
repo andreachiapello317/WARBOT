@@ -15,7 +15,7 @@ SCREEN_KEY = "screen"
 WAITING_KEY = "waiting_city"
 HITS_KEY = "city_hits"
 OSM_STATE_KEY = "osm_state"
-OPENSKY_STATE_KEY = "opensky_state"
+AIRTRAFFIC_STATE_KEY = "airtraffic_state"
 
 # Schermi noti per ⬅️ Indietro contestuale.
 SCREEN_CITY = "city"
@@ -25,8 +25,8 @@ SCREEN_OSM_MENU = "osm_menu"
 SCREEN_OSM_RESULTS = "osm_results"
 SCREEN_OSM_ITEM = "osm_item"
 SCREEN_OSM_NEAR = "osm_near"
-SCREEN_OPENSKY_MENU = "opensky_menu"
-SCREEN_OPENSKY_RESULTS = "opensky_results"
+SCREEN_AIRTRAFFIC_MENU = "airtraffic_menu"
+SCREEN_AIRTRAFFIC_RESULTS = "airtraffic_results"
 
 
 def city_from_hit(hit: dict[str, Any]) -> dict[str, Any]:
@@ -64,6 +64,7 @@ def set_city(context: ContextTypes.DEFAULT_TYPE, hit: dict[str, Any]) -> dict[st
     context.user_data[CITY_KEY] = city
     context.user_data["osm_place"] = city
     context.user_data[WAITING_KEY] = False
+    context.user_data.pop(AIRTRAFFIC_STATE_KEY, None)
     log.info("[CITY] resolved=%s lat=%s lon=%s", city.get("name"), city.get("lat"), city.get("lon"))
     return city
 
@@ -73,6 +74,7 @@ def clear_city(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("osm_place", None)
     context.user_data.pop(HITS_KEY, None)
     context.user_data.pop(WORLD_KEY, None)
+    context.user_data.pop(AIRTRAFFIC_STATE_KEY, None)
     context.user_data[WAITING_KEY] = True
     set_screen(context, SCREEN_CITY)
 
@@ -124,11 +126,11 @@ def osm_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
     return raw
 
 
-def opensky_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
-    raw = context.user_data.get(OPENSKY_STATE_KEY)
+def airtraffic_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
+    raw = context.user_data.get(AIRTRAFFIC_STATE_KEY)
     if not isinstance(raw, dict):
         raw = {}
-        context.user_data[OPENSKY_STATE_KEY] = raw
+        context.user_data[AIRTRAFFIC_STATE_KEY] = raw
     return raw
 
 

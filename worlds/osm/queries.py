@@ -1,4 +1,4 @@
-"""Query OSM WORLD: wrapper sul motore Overpass esistente. Nessun OpenSky."""
+"""Query OSM WORLD: wrapper sul motore Overpass esistente. Nessun ADSB.lol."""
 
 from __future__ import annotations
 

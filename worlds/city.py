@@ -1,4 +1,4 @@
-"""START, geocoding, menu dei mondi. Nessuna query Overpass/OpenSky."""
+"""START, geocoding, menu dei mondi. Nessuna query Overpass/ADSB.lol."""
 
 from __future__ import annotations
 

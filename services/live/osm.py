@@ -1729,7 +1729,7 @@ def format_osm_place(
         lines.append("")
         lines.append(f"<i>{e(note)}</i>")
     if live_feeds:
-        lines += ["", "Overpass parte solo sulle categorie OSM. ✈️ Aerei LIVE usa OpenSky.", f"<i>{OSM_NOTE}</i>"]
+        lines += ["", "Overpass parte solo sulle categorie OSM. ✈️ Aerei LIVE sta in AIR TRAFFIC.", f"<i>{OSM_NOTE}</i>"]
     else:
         lines += ["", "Overpass parte solo quando scegli una categoria.", f"<i>{OSM_NOTE}</i>"]
     return clip("\n".join(lines))

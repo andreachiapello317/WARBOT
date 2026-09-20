@@ -16,7 +16,7 @@ HandleFn = Callable[[Update, ContextTypes.DEFAULT_TYPE, list[str]], Awaitable[No
 MenuFn = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 
 # Terzo mondo: nel repo non esiste un terzo mondo Telegram già implementato.
-# Non se ne inventa uno. Solo OSM + OpenSky.
+# Non se ne inventa uno. Solo OSM + AIR TRAFFIC.
 WORLD_META: tuple[dict[str, str], ...] = (
     {
         "id": "osm",
@@ -25,10 +25,10 @@ WORLD_META: tuple[dict[str, str], ...] = (
         "description": "Luoghi e infrastrutture OpenStreetMap",
     },
     {
-        "id": "opensky",
-        "title": "OPEN SKY",
+        "id": "airtraffic",
+        "title": "AIR TRAFFIC",
         "icon": "✈️",
-        "description": "Aerei LIVE via OpenSky Network",
+        "description": "Aerei LIVE via ADSB.lol",
     },
 )
 
@@ -49,14 +49,14 @@ _loaded: dict[str, World] = {}
 def _ensure() -> None:
     if _loaded:
         return
-    from worlds.opensky.handler import handle as opensky_handle
-    from worlds.opensky.handler import show_menu as opensky_menu
+    from worlds.airtraffic.handler import handle as air_handle
+    from worlds.airtraffic.handler import show_menu as air_menu
     from worlds.osm.handler import handle as osm_handle
     from worlds.osm.handler import show_menu as osm_menu
 
     handlers = {
         "osm": (osm_handle, osm_menu),
-        "opensky": (opensky_handle, opensky_menu),
+        "airtraffic": (air_handle, air_menu),
     }
     for meta in WORLD_META:
         handle, menu = handlers[meta["id"]]
