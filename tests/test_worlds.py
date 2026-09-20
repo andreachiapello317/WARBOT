@@ -78,15 +78,16 @@ def _hit(place: dict) -> dict:
 
 
 class RegistryTest(unittest.TestCase):
-    def test_two_worlds_no_invented_third(self) -> None:
+    def test_six_worlds_city_life(self) -> None:
         ids = [item["id"] for item in WORLD_META]
-        self.assertEqual(ids, ["osm", "airtraffic", "sky", "earth", "space"])
+        self.assertEqual(ids, ["osm", "life", "airtraffic", "sky", "earth", "space"])
         items = world_menu_items()
         self.assertEqual(items[0]["callback"], "world:osm")
-        self.assertEqual(items[1]["callback"], "world:airtraffic")
-        self.assertEqual(items[2]["callback"], "world:sky")
-        self.assertEqual(items[3]["callback"], "world:earth")
-        self.assertEqual(items[4]["callback"], "world:space")
+        self.assertEqual(items[1]["callback"], "world:life")
+        self.assertEqual(items[2]["callback"], "world:airtraffic")
+        self.assertEqual(items[3]["callback"], "world:sky")
+        self.assertEqual(items[4]["callback"], "world:earth")
+        self.assertEqual(items[5]["callback"], "world:space")
 
     def test_parse_callback_hierarchy(self) -> None:
         self.assertEqual(parse_callback("world:osm"), ("world", ["osm"]))
@@ -126,6 +127,7 @@ class CityContextTest(unittest.TestCase):
         text = format_worlds(city_from_hit(MILANO))
         self.assertIn("Milano", text)
         self.assertIn("OSM WORLD", text)
+        self.assertIn("CITY LIFE", text)
         self.assertIn("AIR TRAFFIC", text)
         self.assertIn("SKY", text)
         self.assertIn("EARTH", text)
@@ -195,6 +197,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
             menu = self.ctx.bot.edits[-1]["text"]
             self.assertIn("Scegli un mondo", menu)
             self.assertIn("OSM WORLD", menu)
+            self.assertIn("CITY LIFE", menu)
             self.assertIn("AIR TRAFFIC", menu)
             self.assertIn("SKY", menu)
             self.assertNotIn("Stazioni ferroviarie", menu)
@@ -340,6 +343,7 @@ class FlowTest(unittest.IsolatedAsyncioTestCase):
         set_city(self.ctx, MILANO)  # type: ignore[arg-type]
         with patch("worlds.city.geocode") as geo:
             await dispatch(self.update, self.ctx, "world:osm")  # type: ignore[arg-type]
+            await dispatch(self.update, self.ctx, "world:life")  # type: ignore[arg-type]
             await dispatch(self.update, self.ctx, "world:airtraffic")  # type: ignore[arg-type]
             await dispatch(self.update, self.ctx, "world:sky")  # type: ignore[arg-type]
             await dispatch(self.update, self.ctx, "world:list")  # type: ignore[arg-type]

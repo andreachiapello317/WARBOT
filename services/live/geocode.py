@@ -16,6 +16,7 @@ from services.live.engine import timed
 
 USER_AGENT = "WARBOT/1.0 (OSM WORLD; geocoder cache; not bulk)"
 PHOTON_URL = "https://photon.komoot.io/api/"
+PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_GAP = 1.1
 PHOTON_TIMEOUT = osm_cache.int_env("OSM_GEOCODER_TIMEOUT", 4, lo=2, hi=12)
@@ -282,3 +283,42 @@ def geocode(query: str, *, limit: int = 5) -> dict[str, Any]:
     osm_cache.put(key, {"hits": rows}, osm_cache.GEOCODE_TTL)
     timed("geocoding", t0, n=len(rows))
     return {"ok": True, "hits": rows, "query": q, "cached": False}
+
+
+def reverse_geocode(lat: float, lon: float) -> dict[str, Any] | None:
+    """Photon reverse. Fallisce in silenzio: il caller usa 'Qui' + coordinate."""
+    try:
+        url = PHOTON_REVERSE_URL + "?" + urllib.parse.urlencode(
+            {"lat": f"{float(lat):.5f}", "lon": f"{float(lon):.5f}"}
+        )
+        payload = _get_json(url, timeout=PHOTON_TIMEOUT)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError, KeyError, OSError):
+        return None
+    feats = payload.get("features") if isinstance(payload, dict) else None
+    if not isinstance(feats, list) or not feats:
+        return None
+    feat = feats[0] if isinstance(feats[0], dict) else None
+    if not feat:
+        return None
+    geom = feat.get("geometry") or {}
+    coords = geom.get("coordinates") or []
+    props = feat.get("properties") or {}
+    try:
+        rlon, rlat = float(coords[0]), float(coords[1])
+    except (TypeError, ValueError, IndexError):
+        rlat, rlon = float(lat), float(lon)
+    name = str(props.get("name") or props.get("city") or props.get("locality") or "Qui").strip()
+    country = str(props.get("country") or props.get("countrycode") or "").strip()
+    return _place(
+        name=name,
+        country=country,
+        lat=rlat,
+        lon=rlon,
+        bbox=None,
+        source="photon-reverse",
+        extra={
+            "country_code": str(props.get("countrycode") or "").lower(),
+            "state": str(props.get("state") or ""),
+            "municipality": str(props.get("city") or props.get("locality") or ""),
+        },
+    )

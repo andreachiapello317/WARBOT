@@ -37,6 +37,13 @@ def results_keyboard(bundle: dict, *, page: int, query_id: str, error: bool, row
                 kb("📅 7 giorni", "sky:weather:week"),
             ]
         ]
+    elif kind == "air" and not error:
+        extra = [
+            [
+                kb("Ora", "sky:air"),
+                kb("Prossime 12h", "sky:air:hours"),
+            ]
+        ]
     return results_markup(
         prefix="sky",
         query_id=kind or "weather",

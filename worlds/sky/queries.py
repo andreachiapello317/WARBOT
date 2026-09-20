@@ -9,6 +9,7 @@ from worlds.sky.service import run_sky
 QUERIES = (
     {"id": "weather", "emoji": "🌤️", "title": "Meteo"},
     {"id": "air", "emoji": "🌬️", "title": "Qualità dell'aria"},
+    {"id": "pollen", "emoji": "🌾", "title": "Pollini"},
     {"id": "marine", "emoji": "🌊", "title": "Mare"},
     {"id": "sun", "emoji": "☀️", "title": "Sole"},
 )

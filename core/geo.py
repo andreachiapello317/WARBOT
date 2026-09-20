@@ -45,6 +45,40 @@ def heading_from_velocity(vx: float, vy: float) -> float | None:
     return ang
 
 
+def azimuth_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Azimut in gradi (0 = nord) dal punto 1 verso il punto 2."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlmb = math.radians(lon2 - lon1)
+    x = math.sin(dlmb) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dlmb)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+_CARDINALS_IT = (
+    "N",
+    "NNE",
+    "NE",
+    "ENE",
+    "E",
+    "ESE",
+    "SE",
+    "SSE",
+    "S",
+    "SSO",
+    "SO",
+    "OSO",
+    "O",
+    "ONO",
+    "NO",
+    "NNO",
+)
+
+
+def cardinal_it(deg: float) -> str:
+    idx = int((float(deg) + 11.25) // 22.5) % 16
+    return _CARDINALS_IT[idx]
+
+
 def solar_elevation_deg(lat: float, lon: float, when: datetime | None = None) -> float:
     """Elevazione solare approssimata (gradi). Calcolo locale, non un'API."""
     dt = when or datetime.now(timezone.utc)

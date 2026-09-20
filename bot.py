@@ -3,7 +3,7 @@
 WARBOT — città, poi mondi, poi query.
 
 START chiede la località. Il geocoding crea il CityContext.
-Ogni mondo (OSM, AIR TRAFFIC, SKY, EARTH, SPACE) usa quelle coordinate. Nessun secondo geocoding
+Ogni mondo (OSM, CITY LIFE, AIR TRAFFIC, SKY, EARTH, SPACE) usa quelle coordinate. Nessun secondo geocoding
 quando si passa da un mondo all'altro.
 
 Webhook / token / Render: invariati.
@@ -11,6 +11,7 @@ Webhook / token / Render: invariati.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -186,6 +187,10 @@ async def cmd_space(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await cmd_world(update, context, "space")
 
 
+async def cmd_life(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await cmd_world(update, context, "life")
+
+
 async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None or not message.text:
@@ -195,6 +200,27 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     await lookup_city(update, context, query)
     await delete_user_command(update)
+
+
+async def on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    loc = message.location if message is not None else None
+    if loc is None:
+        return
+    lat, lon = float(loc.latitude), float(loc.longitude)
+    logger.info("[CITY] location lat=%s lon=%s", lat, lon)
+    from core.session import set_city
+    from services.live.geocode import reverse_geocode
+    from worlds.life.service import location_hit
+
+    reverse = await asyncio.to_thread(reverse_geocode, lat, lon)
+    hit = location_hit(lat, lon, reverse)
+    set_city(context, hit)
+    world = get_world("life")
+    if world:
+        await world.handle(update, context, ["near"])
+        return
+    await show_worlds(update, context)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,6 +261,7 @@ async def post_init(application: Application) -> None:
             [
                 BotCommand("start", "Inserisci una città"),
                 BotCommand("osm", "OSM WORLD"),
+                BotCommand("life", "CITY LIFE"),
                 BotCommand("airtraffic", "AIR TRAFFIC"),
                 BotCommand("sky", "SKY"),
                 BotCommand("earth", "EARTH"),
@@ -252,11 +279,13 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler(["aiuto", "help"], cmd_aiuto))
     application.add_handler(CommandHandler(["osm", "live", "overpass"], cmd_osm))
+    application.add_handler(CommandHandler(["life", "citta", "vita"], cmd_life))
     application.add_handler(CommandHandler(["airtraffic", "aerei"], cmd_airtraffic))
     application.add_handler(CommandHandler("sky", cmd_sky))
     application.add_handler(CommandHandler("earth", cmd_earth))
     application.add_handler(CommandHandler("space", cmd_space))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=callback_pattern()))
+    application.add_handler(MessageHandler(filters.LOCATION, on_location))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_plain_text))
     application.add_handler(MessageHandler(filters.COMMAND, on_unknown_command))
     application.add_error_handler(on_error)

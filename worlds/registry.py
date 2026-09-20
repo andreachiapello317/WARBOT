@@ -23,6 +23,12 @@ WORLD_META: tuple[dict[str, str], ...] = (
         "description": "Luoghi e infrastrutture OpenStreetMap",
     },
     {
+        "id": "life",
+        "title": "CITY LIFE",
+        "icon": "🏙️",
+        "description": "Mobilità, allerte, servizi, vita in città",
+    },
+    {
         "id": "airtraffic",
         "title": "AIR TRAFFIC",
         "icon": "✈️",
@@ -69,6 +75,8 @@ def _ensure() -> None:
     from worlds.airtraffic.handler import show_menu as air_menu
     from worlds.earth.handler import handle as earth_handle
     from worlds.earth.handler import show_menu as earth_menu
+    from worlds.life.handler import handle as life_handle
+    from worlds.life.handler import show_menu as life_menu
     from worlds.osm.handler import handle as osm_handle
     from worlds.osm.handler import show_menu as osm_menu
     from worlds.sky.handler import handle as sky_handle
@@ -78,6 +86,7 @@ def _ensure() -> None:
 
     handlers = {
         "osm": (osm_handle, osm_menu),
+        "life": (life_handle, life_menu),
         "airtraffic": (air_handle, air_menu),
         "sky": (sky_handle, sky_menu),
         "earth": (earth_handle, earth_menu),

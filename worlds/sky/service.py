@@ -84,7 +84,7 @@ def _num(value: Any) -> float | None:
     return number
 
 
-def fetch_weather(lat: float, lon: float) -> dict[str, Any]:
+def fetch_weather(lat: float, lon: float, *, past_days: int = 0) -> dict[str, Any]:
     params = {
         "latitude": f"{lat:.5f}",
         "longitude": f"{lon:.5f}",
@@ -118,8 +118,10 @@ def fetch_weather(lat: float, lon: float) -> dict[str, Any]:
             ]
         ),
         "timezone": "auto",
-        "forecast_days": "7",
+        "forecast_days": "7" if past_days <= 0 else "1",
     }
+    if past_days > 0:
+        params["past_days"] = str(int(past_days))
     url = FORECAST_URL + "?" + urlencode(params)
     http, payload, bad, ms = _get(url)
     log.info("[API] provider=open-meteo request_ms=%.0f http=%s", ms, http if http > 0 else "000")
@@ -141,7 +143,7 @@ def fetch_weather(lat: float, lon: float) -> dict[str, Any]:
     }
 
 
-def fetch_air(lat: float, lon: float) -> dict[str, Any]:
+def fetch_air(lat: float, lon: float, *, past_days: int = 0, forecast_days: int = 2) -> dict[str, Any]:
     params = {
         "latitude": f"{lat:.5f}",
         "longitude": f"{lon:.5f}",
@@ -155,27 +157,55 @@ def fetch_air(lat: float, lon: float) -> dict[str, Any]:
                 "nitrogen_dioxide",
                 "sulphur_dioxide",
                 "ozone",
+                "alder_pollen",
+                "birch_pollen",
+                "grass_pollen",
+                "mugwort_pollen",
+                "olive_pollen",
+                "ragweed_pollen",
+            ]
+        ),
+        "hourly": ",".join(
+            [
+                "european_aqi",
+                "pm2_5",
+                "pm10",
+                "nitrogen_dioxide",
+                "ozone",
+                "grass_pollen",
+                "birch_pollen",
             ]
         ),
         "timezone": "auto",
         "domains": "auto",
+        "forecast_days": str(int(forecast_days)),
     }
+    if past_days > 0:
+        params["past_days"] = str(int(past_days))
+    cache_key = f"airq:{lat:.3f}:{lon:.3f}:{past_days}:{forecast_days}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     url = AIR_URL + "?" + urlencode(params)
     http, payload, bad, ms = _get(url)
     log.info("[API] provider=open-meteo-air request_ms=%.0f http=%s", ms, http if http > 0 else "000")
     if http != 200 or bad or not isinstance(payload, dict):
         return _fail(error_code(http, invalid_json=bad), http, ms)
     current = payload.get("current") if isinstance(payload.get("current"), dict) else {}
-    return {
+    hourly = payload.get("hourly") if isinstance(payload.get("hourly"), dict) else {}
+    bundle = {
         "ok": True,
         "kind": "air",
         "provider": "open-meteo",
         "request_ms": ms,
         "timezone": str(payload.get("timezone") or ""),
         "current": current,
+        "hourly": hourly,
         "rows": [],
         "http": http,
     }
+    _cache_put(cache_key, bundle)
+    return dict(bundle)
 
 
 def fetch_marine(lat: float, lon: float) -> dict[str, Any]:
@@ -231,8 +261,10 @@ def run_sky(city: dict[str, Any], query_id: str) -> dict[str, Any]:
     if cached is not None:
         cached["query"] = query_id
         return cached
-    if qid == "air":
+    if qid in {"air", "pollen"}:
         bundle = fetch_air(lat, lon)
+        if qid == "pollen":
+            bundle["kind"] = "pollen"
     elif qid == "marine":
         bundle = fetch_marine(lat, lon)
     else:
@@ -273,7 +305,40 @@ def format_sky(bundle: dict[str, Any], city: dict[str, Any], *, offset: int = 0,
     cur = bundle.get("current") or {}
     daily = bundle.get("daily") or {}
     if kind == "air":
+        view = (bundle.get("query") or "air").split(":")
+        hours = len(view) > 1 and view[1] == "hours"
         lines = [f"🌬️ <b>QUALITÀ DELL'ARIA</b>", f"📍 {e(name)}", ""]
+        if hours:
+            hourly = bundle.get("hourly") or {}
+            times = list(hourly.get("time") or [])
+            aqi = list(hourly.get("european_aqi") or [])
+            pm = list(hourly.get("pm2_5") or [])
+            no2 = list(hourly.get("nitrogen_dioxide") or [])
+            shown = 0
+            now_prefix = datetime.now().strftime("%Y-%m-%dT%H")
+            start = 0
+            for i, stamp in enumerate(times):
+                if str(stamp)[:13] >= now_prefix:
+                    start = i
+                    break
+            for i in range(start, min(start + 12, len(times))):
+                stamp = str(times[i])
+                hh = stamp[11:16] if "T" in stamp else stamp
+                bits = []
+                if i < len(aqi) and aqi[i] is not None:
+                    bits.append(f"AQI {_fmt(aqi[i])}")
+                if i < len(pm) and pm[i] is not None:
+                    bits.append(f"PM2.5 {_fmt(pm[i], digits=1)}")
+                if i < len(no2) and no2[i] is not None:
+                    bits.append(f"NO₂ {_fmt(no2[i])}")
+                if bits:
+                    lines.append(f"{hh}: {' · '.join(bits)}")
+                    shown += 1
+            if shown == 0:
+                lines.append("🔎 Nessuna previsione oraria per questa località.")
+            lines.append("")
+            lines.append("<i>Open-Meteo CAMS · previsione, non stazioni ARPA.</i>")
+            return clip("\n".join(lines))
         aqi = _fmt(cur.get("european_aqi"))
         if aqi:
             lines.append(f"AQI (EEA): {aqi}")
@@ -293,6 +358,44 @@ def format_sky(bundle: dict[str, Any], city: dict[str, Any], *, offset: int = 0,
                 lines.append(f"{label}: {val}")
         if len(lines) <= 3:
             lines.append("🔎 Nessun dato di qualità dell'aria per questa località.")
+        else:
+            lines.append("")
+            lines.append("<i>Open-Meteo CAMS · modello, non la stazione ARPA più vicina.</i>")
+        return clip("\n".join(lines))
+    if kind == "pollen":
+        lines = [
+            f"🌾 <b>POLLINI</b>",
+            f"📍 {e(name)}",
+            "ℹ️ CAMS Europa, grani/m³. Fuori stagione o extra-UE: n/d.",
+            "",
+        ]
+        mapping = (
+            ("Erba", "grass_pollen"),
+            ("Betulla", "birch_pollen"),
+            ("Ontano", "alder_pollen"),
+            ("Artemisia", "mugwort_pollen"),
+            ("Olivo", "olive_pollen"),
+            ("Ambrosia", "ragweed_pollen"),
+        )
+        any_val = False
+        for label, key in mapping:
+            val = _num(cur.get(key))
+            if val is None:
+                continue
+            any_val = True
+            if val < 1:
+                level = "assente"
+            elif val < 10:
+                level = "basso"
+            elif val < 50:
+                level = "moderato"
+            elif val < 100:
+                level = "alto"
+            else:
+                level = "molto alto"
+            lines.append(f"{label}: {val:.1f} · {level}")
+        if not any_val:
+            lines.append("🔎 Nessun bollettino pollini per questa località (copertura CAMS Europa).")
         return clip("\n".join(lines))
     if kind == "marine":
         lines = [f"🌊 <b>MARE</b>", f"📍 {e(name)}", ""]

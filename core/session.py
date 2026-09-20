@@ -15,6 +15,7 @@ WORLD_KEY = "world"
 SCREEN_KEY = "screen"
 WAITING_KEY = "waiting_city"
 HITS_KEY = "city_hits"
+PREVIOUS_CITY_KEY = "previous_city"
 OSM_STATE_KEY = "osm_state"
 AIRTRAFFIC_STATE_KEY = "airtraffic_state"
 
@@ -24,6 +25,7 @@ DYNAMIC_STATE_KEYS = (
     "sky_state",
     "earth_state",
     "space_state",
+    "life_state",
 )
 
 SCREEN_CITY = "city"
@@ -90,6 +92,13 @@ def _clear_dynamic(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def set_city(context: ContextTypes.DEFAULT_TYPE, hit: dict[str, Any]) -> dict[str, Any]:
     city = city_from_hit(hit)
+    old = context.user_data.get(CITY_KEY)
+    if (
+        isinstance(old, dict)
+        and old.get("lat") is not None
+        and (old.get("lat") != city["lat"] or old.get("lon") != city["lon"])
+    ):
+        context.user_data[PREVIOUS_CITY_KEY] = old
     context.user_data[CITY_KEY] = city
     context.user_data["osm_place"] = city
     context.user_data[WAITING_KEY] = False
@@ -98,11 +107,19 @@ def set_city(context: ContextTypes.DEFAULT_TYPE, hit: dict[str, Any]) -> dict[st
     return city
 
 
+def get_previous_city(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
+    prev = context.user_data.get(PREVIOUS_CITY_KEY)
+    if isinstance(prev, dict) and "lat" in prev and "lon" in prev:
+        return prev
+    return None
+
+
 def clear_city(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(CITY_KEY, None)
     context.user_data.pop("osm_place", None)
     context.user_data.pop(HITS_KEY, None)
     context.user_data.pop(WORLD_KEY, None)
+    context.user_data.pop(PREVIOUS_CITY_KEY, None)
     _clear_dynamic(context)
     context.user_data[WAITING_KEY] = True
     set_screen(context, SCREEN_CITY)

@@ -66,11 +66,12 @@ class CityContextTest(unittest.TestCase):
 
 
 class RegistryTest(unittest.TestCase):
-    def test_five_worlds(self) -> None:
-        self.assertEqual(list(world_ids()), ["osm", "airtraffic", "sky", "earth", "space"])
+    def test_six_worlds(self) -> None:
+        self.assertEqual(list(world_ids()), ["osm", "life", "airtraffic", "sky", "earth", "space"])
         self.assertEqual(parse_callback("sky:weather:day:1"), ("sky", ["weather", "day", "1"]))
         self.assertEqual(parse_callback("earth:earthquakes"), ("earth", ["earthquakes"]))
         self.assertEqual(parse_callback("space:iss"), ("space", ["iss"]))
+        self.assertEqual(parse_callback("life:near"), ("life", ["near"]))
         self.assertNotIn("opensky", [w["id"] for w in WORLD_META])
 
 

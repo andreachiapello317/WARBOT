@@ -10,7 +10,7 @@ from typing import Any
 
 from sgp4.api import Satrec, jday
 
-from core.geo import haversine_km
+from core.geo import azimuth_deg, cardinal_it, haversine_km, solar_elevation_deg
 from core.http import error_code, http_get_retry, parse_json
 from core.pagination import DEFAULT_PAGE_SIZE
 from services.live.osm import clip, e
@@ -19,9 +19,13 @@ log = logging.getLogger("warbot.space")
 
 ISS_URL = "https://api.wheretheiss.at/v1/satellites/25544"
 CELESTRAK_TLE = "https://celestrak.org/NORAD/elements/gp.php?GROUP={group}&FORMAT=tle"
+KP_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
+FIREBALL_URL = "https://ssd-api.jpl.nasa.gov/fireball.api?limit=20"
 TIMEOUT_S = 15
 TLE_TTL = 6 * 3600
 ISS_TTL = 20
+KP_TTL = 300
+FIREBALL_TTL = 1800
 RE_KM = 6378.137
 
 _tle_cache: dict[str, tuple[float, list[tuple[str, Satrec]]]] = {}
@@ -146,6 +150,8 @@ def _next_pass(sat: Satrec, lat: float, lon: float, hours: int = 12) -> dict[str
     aos = None
     max_el = -90.0
     max_t = None
+    aos_ll: tuple[float, float] | None = None
+    max_ll: tuple[float, float] | None = None
     for step in range(0, hours * 60, 1):
         when = start + timedelta(minutes=step)
         state = _propagate(sat, when)
@@ -158,21 +164,45 @@ def _next_pass(sat: Satrec, lat: float, lon: float, hours: int = 12) -> dict[str
             aos = when
             max_el = el
             max_t = when
+            aos_ll = (slat, slon)
+            max_ll = (slat, slon)
         elif above:
             if el > max_el:
                 max_el = el
                 max_t = when
+                max_ll = (slat, slon)
             if el < 10:
                 mins = int((aos - start).total_seconds() // 60) if aos else None
+                az = azimuth_deg(lat, lon, aos_ll[0], aos_ll[1]) if aos_ll else None
+                az_max = azimuth_deg(lat, lon, max_ll[0], max_ll[1]) if max_ll else None
+                sun_el = solar_elevation_deg(lat, lon, aos) if aos else None
                 return {
                     "in_minutes": max(0, mins or 0),
                     "aos": aos.isoformat() if aos else None,
                     "max_el": max_el,
                     "culmination": max_t.isoformat() if max_t else None,
+                    "aos_az": az,
+                    "max_az": az_max,
+                    "aos_dir": cardinal_it(az) if az is not None else None,
+                    "max_dir": cardinal_it(az_max) if az_max is not None else None,
+                    "sun_el": sun_el,
                 }
     if above and aos:
         mins = int((aos - start).total_seconds() // 60)
-        return {"in_minutes": max(0, mins), "aos": aos.isoformat(), "max_el": max_el, "culmination": None}
+        az = azimuth_deg(lat, lon, aos_ll[0], aos_ll[1]) if aos_ll else None
+        az_max = azimuth_deg(lat, lon, max_ll[0], max_ll[1]) if max_ll else None
+        sun_el = solar_elevation_deg(lat, lon, aos)
+        return {
+            "in_minutes": max(0, mins),
+            "aos": aos.isoformat(),
+            "max_el": max_el,
+            "culmination": None,
+            "aos_az": az,
+            "max_az": az_max,
+            "aos_dir": cardinal_it(az) if az is not None else None,
+            "max_dir": cardinal_it(az_max) if az_max is not None else None,
+            "sun_el": sun_el,
+        }
     return None
 
 
@@ -262,11 +292,135 @@ def _overheads(group: str, lat: float, lon: float, *, limit: int = 20, name_filt
     }
 
 
+def _signed(value: Any, direction: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    letter = str(direction or "").strip().upper()
+    if letter in {"S", "W"}:
+        return -abs(number)
+    return number
+
+
+def fetch_kp() -> dict[str, Any]:
+    key = "kp"
+    hit = _bundle_cache.get(key)
+    if hit and time.time() - hit[0] < KP_TTL:
+        return dict(hit[1])
+    http, body, _hdrs, ms = http_get_retry(KP_URL, timeout=TIMEOUT_S)
+    log.info("[SPACE] provider=noaa-swpc request_ms=%.0f http=%s", ms, http if http > 0 else "000")
+    if http != 200:
+        return _fail(error_code(http), http, ms)
+    payload, bad = parse_json(body)
+    if bad or not isinstance(payload, list) or not payload:
+        return _fail(error_code(http, invalid_json=bad), http, ms)
+    rows = [r for r in payload if isinstance(r, dict) and r.get("time_tag")]
+    last = rows[-1] if rows else {}
+    recent = rows[-8:] if len(rows) >= 8 else rows
+    kps = []
+    for row in recent:
+        try:
+            kps.append(float(row.get("Kp")))
+        except (TypeError, ValueError):
+            continue
+    bundle = {
+        "ok": True,
+        "kind": "aurora",
+        "provider": "noaa-swpc",
+        "request_ms": ms,
+        "http": http,
+        "rows": [],
+        "kp": last.get("Kp"),
+        "time_tag": last.get("time_tag"),
+        "kp_max": max(kps) if kps else last.get("Kp"),
+        "series": recent,
+    }
+    _bundle_cache[key] = (time.time(), bundle)
+    return dict(bundle)
+
+
+def aurora_chance(lat: float, kp: float | None) -> str:
+    if kp is None:
+        return "n/d"
+    threshold = 66.5 - 2.0 * float(kp)
+    glat = abs(float(lat))
+    if glat >= threshold - 1:
+        return "possibile a occhio nudo (cielo scuro, orizzonte nord)"
+    if glat >= threshold - 7:
+        return "improbabile: al massimo un bagliore basso a nord"
+    return "non visibile a questa latitudine"
+
+
+def fetch_fireballs(lat: float, lon: float) -> dict[str, Any]:
+    key = f"fireball:{lat:.2f}:{lon:.2f}"
+    hit = _bundle_cache.get(key)
+    if hit and time.time() - hit[0] < FIREBALL_TTL:
+        return dict(hit[1])
+    http, body, _hdrs, ms = http_get_retry(FIREBALL_URL, timeout=TIMEOUT_S)
+    log.info("[SPACE] provider=jpl-fireball request_ms=%.0f http=%s", ms, http if http > 0 else "000")
+    if http != 200:
+        return _fail(error_code(http), http, ms)
+    payload, bad = parse_json(body)
+    if bad or not isinstance(payload, dict):
+        return _fail(error_code(http, invalid_json=bad), http, ms)
+    fields = list(payload.get("fields") or [])
+    idx = {name: i for i, name in enumerate(fields)}
+    rows: list[dict[str, Any]] = []
+    for raw in payload.get("data") or []:
+        if not isinstance(raw, list):
+            continue
+        def col(name: str) -> Any:
+            i = idx.get(name)
+            return raw[i] if i is not None and i < len(raw) else None
+
+        elat = _signed(col("lat"), col("lat-dir"))
+        elon = _signed(col("lon"), col("lon-dir"))
+        dist = haversine_km(lat, lon, elat, elon) if elat is not None and elon is not None else None
+        rows.append(
+            {
+                "date": col("date"),
+                "energy": col("energy"),
+                "lat": elat,
+                "lon": elon,
+                "alt": col("alt"),
+                "vel": col("vel"),
+                "distance_km": dist,
+            }
+        )
+    rows.sort(key=lambda r: (r.get("distance_km") is None, r.get("distance_km") or 9e9))
+    bundle = {
+        "ok": True,
+        "kind": "meteors",
+        "provider": "jpl-ssd",
+        "request_ms": ms,
+        "http": http,
+        "rows": rows,
+    }
+    _bundle_cache[key] = (time.time(), bundle)
+    return dict(bundle)
+
+
 def run_space(city: dict[str, Any], query_id: str) -> dict[str, Any]:
     qid = (query_id or "iss").strip().lower()
     lat, lon = float(city["lat"]), float(city["lon"])
     if qid == "iss":
         return run_iss(city)
+    if qid == "aurora":
+        bundle = fetch_kp()
+        kp = None
+        try:
+            kp = float(bundle.get("kp_max") if bundle.get("kp_max") is not None else bundle.get("kp"))
+        except (TypeError, ValueError):
+            kp = None
+        bundle["chance"] = aurora_chance(lat, kp)
+        bundle["query"] = qid
+        bundle["lat"] = lat
+        return bundle
+    if qid == "meteors":
+        bundle = fetch_fireballs(lat, lon)
+        bundle["query"] = qid
+        return bundle
     if qid == "starlink":
         bundle = _overheads("starlink", lat, lon, limit=20)
         bundle["kind"] = "starlink"
@@ -307,6 +461,25 @@ def format_space(bundle: dict[str, Any], city: dict[str, Any], *, offset: int = 
             lines.append("")
             lines.append(f"📍 Prossimo passaggio su {e(name)}:")
             lines.append(f"{int(nxt['in_minutes'])} min (elev. max {nxt.get('max_el', 0):.0f}°)")
+            if nxt.get("aos"):
+                stamp = str(nxt["aos"])
+                hh = stamp[11:16] if "T" in stamp else stamp
+                lines.append(f"🕐 {hh} UTC")
+            if nxt.get("aos_dir"):
+                az = nxt.get("aos_az")
+                az_s = f" (az {az:.0f}°)" if isinstance(az, (int, float)) else ""
+                extra = ""
+                if nxt.get("max_dir") and nxt.get("max_dir") != nxt.get("aos_dir"):
+                    extra = f" → {nxt['max_dir']}"
+                lines.append(f"🧭 Compare da {nxt['aos_dir']}{az_s}{extra}")
+            sun_el = nxt.get("sun_el")
+            if isinstance(sun_el, (int, float)):
+                if sun_el < -6:
+                    lines.append("🌙 Notturno — visibile a occhio nudo se cielo sereno")
+                elif sun_el < 0:
+                    lines.append("🌇 Crepuscolo — visibilità bassa")
+                else:
+                    lines.append("☀️ Diurno — difficile da vedere")
         elif nxt is None:
             lines.append("")
             lines.append("ℹ️ Nessun passaggio visibile calcolato nelle prossime 24 ore, oppure TLE non disponibile.")
@@ -314,6 +487,53 @@ def format_space(bundle: dict[str, Any], city: dict[str, Any], *, offset: int = 
         if src:
             lines.append("")
             lines.append(f"<i>{e(str(src))}</i>")
+        return clip("\n".join(lines))
+    if kind == "aurora":
+        lines = ["🌌 <b>AURORA / ATTIVITÀ SOLARE</b>", f"📍 {e(name)}", ""]
+        kp = bundle.get("kp")
+        kp_max = bundle.get("kp_max")
+        if kp is not None:
+            lines.append(f"Kp ora: {kp}")
+        if kp_max is not None and kp_max != kp:
+            lines.append(f"Kp max recente: {kp_max}")
+        if bundle.get("time_tag"):
+            lines.append(f"🕐 {e(str(bundle['time_tag']))}")
+        chance = bundle.get("chance")
+        if chance:
+            lines.append(f"👁️ {e(str(chance))}")
+        lines.append("")
+        lines.append("<i>NOAA SWPC planetary K-index. A latitudini italiane serve Kp molto alto.</i>")
+        return clip("\n".join(lines))
+    if kind == "meteors":
+        rows = list(bundle.get("rows") or [])
+        lines = [
+            "☄️ <b>METEORE / BOLIDI</b>",
+            f"📍 rispetto a {e(name)}",
+            "ℹ️ NASA JPL fireball: eventi già avvenuti, non un allarme in tempo reale.",
+            "",
+        ]
+        nearby = [r for r in rows if isinstance(r.get("distance_km"), (int, float)) and r["distance_km"] <= 2500]
+        chunk = (nearby or rows)[offset : offset + limit]
+        if not chunk:
+            lines.append("🔎 Nessun bolide catalogato di recente.")
+            return clip("\n".join(lines))
+        if not nearby:
+            lines.append("Nessun bolide vicino. Ultimi eventi globali:")
+            lines.append("")
+        for row in chunk:
+            lines.append(f"• {e(str(row.get('date') or 'evento'))}")
+            bits = []
+            if row.get("energy") is not None:
+                bits.append(f"{row['energy']} kt")
+            if isinstance(row.get("distance_km"), (int, float)):
+                bits.append(f"{row['distance_km']:.0f} km")
+            if isinstance(row.get("alt"), (int, float, str)) and row.get("alt") not in {None, ""}:
+                bits.append(f"alt {row['alt']} km")
+            if bits:
+                lines.append("   " + " · ".join(str(b) for b in bits))
+            lines.append("")
+        while lines and lines[-1] == "":
+            lines.pop()
         return clip("\n".join(lines))
     title = "⭐ <b>STARLINK</b>" if kind == "starlink" else "🛰️ <b>SATELLITI VISIBILI</b>"
     rows = list(bundle.get("rows") or [])
